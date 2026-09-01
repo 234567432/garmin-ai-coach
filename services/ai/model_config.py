@@ -1,9 +1,11 @@
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any
 
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
+from langchain_community.chat_models import ChatOllama
 
 from core.config import get_config
 
@@ -226,6 +228,24 @@ class ModelSelector:
 
     @classmethod
     def get_llm(cls, role: AgentRole):
+        # --- 1. OLLAMA DIRECT OVERRIDE ---
+        # Dieser Block fängt jede Anfrage ab und leitet sie direkt an Ollama um,
+        # wenn in Docker Compose LLM_PROVIDER=ollama gesetzt ist.
+        provider_env = os.getenv("LLM_PROVIDER", "").lower()
+        if provider_env == "ollama":
+            ollama_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+            ollama_model = os.getenv("LLM_MODEL", "qwen2.5:3b")
+            
+            logger.info("OLLAMA OVERRIDE: Routing role %s to local Ollama (%s) at %s", role.value, ollama_model, ollama_url)
+            
+            return ChatOllama(
+                base_url=ollama_url,
+                model=ollama_model,
+                temperature=0.2
+            )
+        # ---------------------------------
+
+        # --- 2. ORIGINAL LOGIC (Fallback für andere Provider) ---
         model_name = ai_settings.get_model_for_role(role)
         selected_config = cls.CONFIGURATIONS.get(model_name)
         if not selected_config:
