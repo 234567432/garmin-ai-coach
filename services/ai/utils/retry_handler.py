@@ -6,7 +6,13 @@ from functools import wraps
 from typing import Any
 
 import anthropic
-from anthropic._exceptions import DeadlineExceededError, OverloadedError, ServiceUnavailableError
+try:
+    from anthropic._exceptions import DeadlineExceededError, OverloadedError, ServiceUnavailableError
+except ImportError:
+    class DummyError(Exception): pass
+    DeadlineExceededError = DummyError
+    OverloadedError = DummyError
+    ServiceUnavailableError = DummyError
 from langgraph.errors import GraphInterrupt
 
 logger = logging.getLogger(__name__)
