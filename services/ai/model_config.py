@@ -170,25 +170,25 @@ class ModelSelector:
             "log": "Using extended output tokens for {role} (max_tokens: 32000)",
         },
         "gpt-5": {
-            "use_responses_api": True,
+            "use_responses_api": False,
             "reasoning": {"effort": "xhigh"},
             "model_kwargs": {"text": {"verbosity": "high"}},
             "log": "Using GPT-5 with Responses API for {role} (verbosity: high, reasoning_effort: xhigh)",
         },
         "gpt-5.2-pro": {
-            "use_responses_api": True,
+            "use_responses_api": False,
             "reasoning": {"effort": "xhigh"},
             "model_kwargs": {"text": {"verbosity": "high"}},
             "log": "Using GPT-5.2 Pro with Responses API for {role} (verbosity: high, reasoning_effort: xhigh)",
         },
         "gpt-5-mini": {
-            "use_responses_api": True,
+            "use_responses_api": False,
             "reasoning": {"effort": "high"},
             "model_kwargs": {"text": {"verbosity": "high"}},
             "log": "Using GPT-5-mini with Responses API for {role} (verbosity: high, reasoning_effort: high)",
         },
         "gpt-5-search": {
-            "use_responses_api": True,
+            "use_responses_api": False,
             "reasoning": {"effort": "xhigh"},
             "model_kwargs": {
                 "text": {"verbosity": "high"},
@@ -198,7 +198,7 @@ class ModelSelector:
             "log": "Using GPT-5.2 with web search + Responses API for {role} (verbosity: high, reasoning_effort: xhigh)",
         },
         "gpt-5.2-pro-search": {
-            "use_responses_api": True,
+            "use_responses_api": False,
             "reasoning": {"effort": "xhigh"},
             "model_kwargs": {
                 "text": {"verbosity": "high"},
