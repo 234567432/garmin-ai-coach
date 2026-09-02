@@ -242,6 +242,7 @@ class ModelSelector:
                 base_url=ollama_url,
                 model=ollama_model,
                 temperature=0.2,
+                num_ctx=4096,
                 format="json"  # <-- WICHTIG: Aktiviert die native strukturierte JSON-Ausgabe
             )
         # ---------------------------------
