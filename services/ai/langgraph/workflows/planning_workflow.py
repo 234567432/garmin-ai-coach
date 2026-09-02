@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime
 from typing import Any, cast
 
@@ -101,11 +102,14 @@ async def run_weekly_planning(
 
     return final_state
 
-
 def create_integrated_analysis_and_planning_workflow():
     LangSmithConfig.setup_langsmith()
 
     workflow = StateGraph(TrainingAnalysisState)
+
+    # ---------------------------------------------------------
+    # Nodes
+    # ---------------------------------------------------------
 
     workflow.add_node("metrics_summarizer", metrics_summarizer_node)
     workflow.add_node("physiology_summarizer", physiology_summarizer_node)
@@ -127,41 +131,227 @@ def create_integrated_analysis_and_planning_workflow():
 
     workflow.add_node("finalize", lambda state: state, defer=True)
 
-    workflow.add_edge(START, "metrics_summarizer")
-    workflow.add_edge(START, "physiology_summarizer")
-    workflow.add_edge(START, "activity_summarizer")
+    # ---------------------------------------------------------
+    # Ollama / CPU mode
+    #
+    # The original workflow executes the three summarizers and
+    # the three experts in parallel.
+    #
+    # This is excellent for powerful/cloud LLMs but is not ideal
+    # for a CPU-only Intel N5095 running local Ollama.
+    #
+    # When LLM_PROVIDER=ollama, execute these six LLM nodes
+    # sequentially so that only one Ollama inference is active
+    # at a time.
+    # ---------------------------------------------------------
 
-    workflow.add_edge("metrics_summarizer", "metrics_expert")
-    workflow.add_edge("physiology_summarizer", "physiology_expert")
-    workflow.add_edge("activity_summarizer", "activity_expert")
+    ollama_mode = os.getenv("LLM_PROVIDER", "").lower() == "ollama"
 
-    workflow.add_edge(["metrics_expert", "physiology_expert", "activity_expert"], "master_orchestrator")
+    if ollama_mode:
+        logger.info(
+            "Ollama CPU mode enabled: "
+            "serializing summarizers and experts to avoid "
+            "parallel local LLM inference"
+        )
 
-    # Master orchestrator uses ONLY Command(goto=...) for dynamic routing
-    # NO unconditional edges from orchestrator - it routes dynamically based on stage
+        # -----------------------------------------------------
+        # Sequential CPU-friendly path
+        # -----------------------------------------------------
+
+        workflow.add_edge(START, "activity_summarizer")
+
+        workflow.add_edge(
+            "activity_summarizer",
+            "metrics_summarizer",
+        )
+
+        workflow.add_edge(
+            "metrics_summarizer",
+            "physiology_summarizer",
+        )
+
+        workflow.add_edge(
+            "physiology_summarizer",
+            "activity_expert",
+        )
+
+        workflow.add_edge(
+            "activity_expert",
+            "metrics_expert",
+        )
+
+        workflow.add_edge(
+            "metrics_expert",
+            "physiology_expert",
+        )
+
+        workflow.add_edge(
+            "physiology_expert",
+            "master_orchestrator",
+        )
+
+    else:
+        # -----------------------------------------------------
+        # Original parallel path for cloud/high-performance LLMs
+        # -----------------------------------------------------
+
+        logger.info(
+            "Parallel LLM mode enabled: "
+            "using original parallel summarizer/expert architecture"
+        )
+
+        workflow.add_edge(START, "metrics_summarizer")
+        workflow.add_edge(START, "physiology_summarizer")
+        workflow.add_edge(START, "activity_summarizer")
+
+        workflow.add_edge(
+            "metrics_summarizer",
+            "metrics_expert",
+        )
+
+        workflow.add_edge(
+            "physiology_summarizer",
+            "physiology_expert",
+        )
+
+        workflow.add_edge(
+            "activity_summarizer",
+            "activity_expert",
+        )
+
+        workflow.add_edge(
+            [
+                "metrics_expert",
+                "physiology_expert",
+                "activity_expert",
+            ],
+            "master_orchestrator",
+        )
+
+    # ---------------------------------------------------------
+    # Analysis branch
+    # ---------------------------------------------------------
 
     workflow.add_edge("synthesis", "formatter")
     workflow.add_edge("formatter", "plot_resolution")
 
-    # Season planner routes back to orchestrator for HITL handling
-    workflow.add_edge("season_planner", "master_orchestrator")
+    # ---------------------------------------------------------
+    # Planning branch
+    # ---------------------------------------------------------
 
-    # Data integration → weekly planner → orchestrator
-    workflow.add_edge("data_integration", "weekly_planner")
-    workflow.add_edge("weekly_planner", "master_orchestrator")
+    workflow.add_edge(
+        "season_planner",
+        "master_orchestrator",
+    )
 
-    workflow.add_edge("plot_resolution", "finalize")
-    workflow.add_edge("plan_formatter", "finalize")
-    workflow.add_edge("finalize", END)
+    workflow.add_edge(
+        "data_integration",
+        "weekly_planner",
+    )
+
+    workflow.add_edge(
+        "weekly_planner",
+        "master_orchestrator",
+    )
+
+    # ---------------------------------------------------------
+    # Finalization
+    # ---------------------------------------------------------
+
+    workflow.add_edge(
+        "plot_resolution",
+        "finalize",
+    )
+
+    workflow.add_edge(
+        "plan_formatter",
+        "finalize",
+    )
+
+    workflow.add_edge(
+        "finalize",
+        END,
+    )
+
+    # ---------------------------------------------------------
+    # Compile
+    # ---------------------------------------------------------
 
     checkpointer = MemorySaver()
     app = workflow.compile(checkpointer=checkpointer)
-    logger.info(
-        "Created integrated analysis + planning workflow with parallel architecture: "
-        "3 summarizers → 3 experts → [analysis branch (synthesis/formatter/plots) || planning branch (season/data_integration/weekly/plan_formatter)] → finalize"
-    )
+
+    if ollama_mode:
+        logger.info(
+            "Created integrated analysis + planning workflow "
+            "with CPU-friendly sequential Ollama execution"
+        )
+    else:
+        logger.info(
+            "Created integrated analysis + planning workflow "
+            "with original parallel architecture"
+        )
 
     return app
+#def create_integrated_analysis_and_planning_workflow():
+#    LangSmithConfig.setup_langsmith()
+#
+#    workflow = StateGraph(TrainingAnalysisState)
+#
+#    workflow.add_node("metrics_summarizer", metrics_summarizer_node)
+#    workflow.add_node("physiology_summarizer", physiology_summarizer_node)
+#    workflow.add_node("activity_summarizer", activity_summarizer_node)
+#
+#    workflow.add_node("metrics_expert", metrics_expert_node)
+#    workflow.add_node("physiology_expert", physiology_expert_node)
+#    workflow.add_node("activity_expert", activity_expert_node)
+#
+#    workflow.add_node("synthesis", synthesis_node)
+#    workflow.add_node("formatter", formatter_node)
+#    workflow.add_node("plot_resolution", plot_resolution_node)
+#
+#    workflow.add_node("season_planner", season_planner_node)
+#    workflow.add_node("master_orchestrator", master_orchestrator_node)
+#    workflow.add_node("data_integration", data_integration_node)
+#    workflow.add_node("weekly_planner", weekly_planner_node)
+#    workflow.add_node("plan_formatter", plan_formatter_node)
+#
+#    workflow.add_node("finalize", lambda state: state, defer=True)
+#
+#    workflow.add_edge(START, "metrics_summarizer")
+#    workflow.add_edge(START, "physiology_summarizer")
+#    workflow.add_edge(START, "activity_summarizer")
+#
+#    workflow.add_edge("metrics_summarizer", "metrics_expert")
+#    workflow.add_edge("physiology_summarizer", "physiology_expert")
+#    workflow.add_edge("activity_summarizer", "activity_expert")
+#
+#    workflow.add_edge(["metrics_expert", "physiology_expert", "activity_expert"], "master_orchestrator")
+#
+#    # Master orchestrator uses ONLY Command(goto=...) for dynamic routing
+#    # NO unconditional edges from orchestrator - it routes dynamically based on stage
+#
+#    workflow.add_edge("synthesis", "formatter")
+#    workflow.add_edge("formatter", "plot_resolution")
+#
+#    # Season planner routes back to orchestrator for HITL handling
+#    workflow.add_edge("season_planner", "master_orchestrator")
+#
+#    # Data integration → weekly planner → orchestrator
+#    workflow.add_edge("data_integration", "weekly_planner")
+#    workflow.add_edge("weekly_planner", "master_orchestrator")
+#
+#    workflow.add_edge("plot_resolution", "finalize")
+#    workflow.add_edge("plan_formatter", "finalize")
+#    workflow.add_edge("finalize", END)
+#
+#    checkpointer = MemorySaver()
+#    app = workflow.compile(checkpointer=checkpointer)
+#    logger.info(
+#        "Created integrated analysis + planning workflow with parallel architecture: "
+#        "3 summarizers → 3 experts → [analysis branch (synthesis/formatter/plots) || planning branch (season/data_integration/weekly/plan_formatter)] → finalize"
+#    )
+#
+#    return app
 
 
 async def run_complete_analysis_and_planning(
