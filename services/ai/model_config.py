@@ -241,7 +241,7 @@ class ModelSelector:
             return ChatOllama(
                 base_url=ollama_url,
                 model=ollama_model,
-                temperature=0.2
+                temperature=0.2,
                 format="json"  # <-- WICHTIG: Aktiviert die native strukturierte JSON-Ausgabe
             )
         # ---------------------------------
