@@ -85,7 +85,7 @@ def create_data_summarizer_node(
                         {
                             "role": "user",
                             "content": effective_user_prompt.format(
-                                data=json.dumps(data_to_summarize, indent=2)
+                                data=json.dumps(data_to_summarize, separators=(",", ":")) #data=json.dumps(data_to_summarize, indent=2)
                             ),
                         },
                     ]
