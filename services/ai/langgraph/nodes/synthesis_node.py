@@ -30,7 +30,7 @@ SYNTHESIS_PLOT_INSTRUCTIONS = """
 - Include plot references as `[PLOT:plot_id]` in your text.
 - These will become interactive charts."""
 
-SYNTHESIS_USER_PROMPT_BASE = """Synthesize the expert analyses into a comprehensive athlete report.
+SYNTHESIS_USER_PROMPT_BASE = """Synthesize the expert analyses into a comprehensive athlete report for {athlete_name}.
 
 ## Inputs
 ### Metrics
@@ -45,6 +45,8 @@ SYNTHESIS_USER_PROMPT_BASE = """Synthesize the expert analyses into a comprehens
 ```markdown
 {physiology_result}
 ```
+### Direct Athlete Feedback / Answers
+{user_answers_block}
 ### Context
 - Competitions: ```json {competitions} ```
 - Date: ```json {current_date} ```
@@ -83,6 +85,15 @@ async def synthesis_node(state: TrainingAnalysisState) -> dict[str, list | str]:
 
         agent_start_time = datetime.now()
 
+        raw_answers = state.get("user_answers") or state.get("context", {}).get("answers", "")
+        if raw_answers:
+            if isinstance(raw_answers, list):
+                user_answers_block = "\n".join([f"- {item}" for item in raw_answers])
+            else:
+                user_answers_block = str(raw_answers)
+        else:
+            user_answers_block = "No direct feedback provided by athlete for this run."
+
         async def call_synthesis_analysis():
             return await handle_tool_calling_in_node(
                 llm_with_tools=ModelSelector.get_llm(AgentRole.SYNTHESIS).bind_tools([]),
@@ -92,20 +103,20 @@ async def synthesis_node(state: TrainingAnalysisState) -> dict[str, list | str]:
                     )},
                     {"role": "user", "content": (
                         SYNTHESIS_USER_PROMPT_BASE.format(
-                            athlete_name=state["athlete_name"],
+                            athlete_name=state.get("athlete_name", "Athlete"),
                             metrics_result=extract_expert_output(state.get("metrics_outputs"), "for_synthesis"),
                             activity_result=extract_expert_output(state.get("activity_outputs"), "for_synthesis"),
                             physiology_result=extract_expert_output(state.get("physiology_outputs"), "for_synthesis"),
-                            competitions=json.dumps(state["competitions"], indent=2),
-                            current_date=json.dumps(state["current_date"], indent=2),
-                            style_guide=state["style_guide"],
+                            user_answers_block=user_answers_block,
+                            competitions=json.dumps(state.get("competitions", []), indent=2),
+                            current_date=json.dumps(state.get("current_date", ""), indent=2),
+                            style_guide=state.get("style_guide", ""),
                         ) + (SYNTHESIS_USER_PLOT_INSTRUCTIONS if plotting_enabled else "")
                     )},
                 ],
                 tools=[],
                 max_iterations=3,
             )
-
         synthesis_result = await retry_with_backoff(
             call_synthesis_analysis, AI_ANALYSIS_CONFIG, "Synthesis Analysis with Tools"
         )
