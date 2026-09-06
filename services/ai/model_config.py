@@ -243,6 +243,7 @@ class ModelSelector:
                 model=ollama_model,
                 temperature=0.2,
                 num_ctx=4096,
+                num_predict=2048, #neu eingefügt, für bessere Hardware anpassen
                 format="json"  # <-- WICHTIG: Aktiviert die native strukturierte JSON-Ausgabe
             )
         # ---------------------------------
