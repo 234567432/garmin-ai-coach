@@ -1,6 +1,11 @@
 import logging
 from datetime import datetime
 
+try:
+    import markdown
+except ImportError:
+    markdown = None
+
 from services.ai.ai_settings import AgentRole
 from services.ai.langgraph.state.training_analysis_state import TrainingAnalysisState
 from services.ai.model_config import ModelSelector
@@ -10,50 +15,142 @@ from .tool_calling_helper import extract_text_content
 
 logger = logging.getLogger(__name__)
 
-PLAN_FORMATTER_SYSTEM_PROMPT = """You are a data visualization specialist.
-## Goal
-Transform training plans into beautiful, functional HTML documents.
-## Principles
-- Clarity: Make complex training information immediately accessible.
-- Hierarchy: Use visual structure to guide attention.
-- Usability: Design for both desktop planning and mobile execution.
-- Aesthetics: Create a professional, athlete-focused visual experience.
-
-## Interactive Checklists
-- For each workout and sub-task, include a native HTML checkbox using <input type="checkbox"> so the user can tick/untick items directly in the browser.
-- Wrap each checkbox in a <label> (or associate via for/id) for tap-friendly, accessible interaction.
-- Use meaningful name/value attributes (e.g., name="wk-2025-09-18-run" value="done") to support optional form submission."""
-
-PLAN_FORMATTER_USER_PROMPT = """Transform the training plan into a professional HTML document.
-
-## Inputs
-### Season Plan
-```markdown
-{season_plan}
-```
-### 4-Week Plan
-```markdown
-{weekly_plan}
-```
-
-## Task
-Convert the markdown content into a single, self-contained HTML document.
-
-## Constraints
-- **Compactness**: The user must see the "big picture" easily. Avoid excessive scrolling.
-- **Layout**: Use a dense, information-rich layout (e.g., grid or compact cards) for the 4-week plan.
-- **Usability**: Include interactive checkboxes for every workout item.
-- **Design**: Professional, athlete-focused aesthetic with clear visual hierarchy.
-
-## Output Requirements
-1. **Structure**:
-   - Header: Athlete name and period.
-   - Section 1: Season Plan Overview (High level).
-   - Section 2: 4-Week Plan (Detailed but compact).
-2. **Format**: Complete HTML5 document with embedded CSS.
-3. **Content**: Preserve all workout details but format them densely.
-4. **Return**: ONLY the HTML code.
+# Statisches HTML-Template mit CSS für kompaktes Layout, Tabellen und Checkboxen
+STATIC_PLANNING_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Athletic Training Plan</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.5;
+      color: #2c3e50;
+      margin: 0;
+      padding: 0;
+      background-color: #f8f9fa;
+    }
+    .container {
+      max-width: 1100px;
+      margin: 20px auto;
+      padding: 30px;
+      background-color: #ffffff;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+      border-radius: 8px;
+    }
+    h1 {
+      color: #1a252f;
+      border-bottom: 2px solid #28a745;
+      padding-bottom: 10px;
+      margin-top: 0;
+    }
+    h2 {
+      color: #2c3e50;
+      margin-top: 25px;
+      border-bottom: 1px solid #e9ecef;
+      padding-bottom: 5px;
+    }
+    h3 {
+      color: #34495e;
+      margin-top: 15px;
+    }
+    ul {
+      padding-left: 20px;
+      list-style-type: none;
+    }
+    li {
+      margin-bottom: 6px;
+    }
+    label {
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+      accent-color: #28a745;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 15px 0;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid #dee2e6;
+      padding: 8px 10px;
+      text-align: left;
+    }
+    th {
+      background-color: #f1f3f5;
+      color: #1a252f;
+    }
+    tr:nth-child(even) {
+      background-color: #f8f9fa;
+    }
+    .content-body {
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Athletic Training Plan</h1>
+    <div class="content-body">
+      <!--CONTENT_PLACEHOLDER-->
+    </div>
+  </div>
+</body>
+</html>
 """
+
+PLAN_FORMATTER_SYSTEM_PROMPT = """You are a sports data assistant. Your sole task is to structure training plans into clean, structured Markdown text.
+Use clear headings (##, ###), tables for weekly schedules, and task list items (- [ ]) for workouts and sub-tasks.
+Do NOT generate HTML tags, CSS styles, or layout blocks."""
+
+_BT = "```"
+PLAN_FORMATTER_USER_PROMPT_BASE = (
+    "Transform the following training plan inputs into readable Markdown.\n"
+    "Structure into Section 1 (Season Plan Overview) and Section 2 (4-Week Plan).\n"
+    "Use Markdown tables where applicable and task list items (- [ ]) for actionable workouts.\n"
+    "Do not write HTML or CSS tags.\n\n"
+    "## Season Plan\n"
+    f"{_BT}markdown\n"
+    "{season_plan}\n"
+    f"{_BT}\n\n"
+    "## 4-Week Plan\n"
+    f"{_BT}markdown\n"
+    "{weekly_plan}\n"
+    f"{_BT}\n"
+)
+
+
+def _convert_markdown_to_html(md_text: str) -> str:
+    """Konvertiert Markdown in HTML und erzeugt interaktive Checkboxen."""
+    if markdown:
+        html = markdown.markdown(md_text, extensions=["tables", "fenced_code"])
+    else:
+        html_lines = []
+        for line in md_text.splitlines():
+            line_str = line.strip()
+            if line_str.startswith("## "):
+                html_lines.append(f"<h2>{line_str[3:]}</h2>")
+            elif line_str.startswith("### "):
+                html_lines.append(f"<h3>{line_str[4:]}</h3>")
+            elif line_str.startswith("- ") or line_str.startswith("* "):
+                html_lines.append(f"<li>{line_str[2:]}</li>")
+            elif line_str:
+                html_lines.append(f"<p>{line_str}</p>")
+        html = "\n".join(html_lines)
+
+    # Wandelt Markdown-Tasklisten (- [ ]) in echte HTML-Checkboxen um
+    html = html.replace("[ ] ", '<label><input type="checkbox"> ')
+    html = html.replace("[x] ", '<label><input type="checkbox" checked> ')
+    return html
 
 
 async def plan_formatter_node(state: TrainingAnalysisState) -> dict[str, list | str]:
@@ -74,14 +171,20 @@ async def plan_formatter_node(state: TrainingAnalysisState) -> dict[str, list | 
             return value
 
         async def call_plan_formatting():
+            season_plan = get_content("season_plan")
+            weekly_plan = get_content("weekly_plan")
+
             response = await ModelSelector.get_llm(AgentRole.FORMATTER).ainvoke([
                 {"role": "system", "content": PLAN_FORMATTER_SYSTEM_PROMPT},
-                {"role": "user", "content": PLAN_FORMATTER_USER_PROMPT.format(
-                    season_plan=get_content("season_plan"),
-                    weekly_plan=get_content("weekly_plan")
+                {"role": "user", "content": PLAN_FORMATTER_USER_PROMPT_BASE.format(
+                    season_plan=season_plan,
+                    weekly_plan=weekly_plan
                 )},
             ])
-            return extract_text_content(response)
+            raw_markdown = extract_text_content(response)
+
+            content_html = _convert_markdown_to_html(raw_markdown)
+            return STATIC_PLANNING_HTML_TEMPLATE.replace("<!--CONTENT_PLACEHOLDER-->", content_html)
 
         planning_html = await retry_with_backoff(
             call_plan_formatting, AI_ANALYSIS_CONFIG, "Plan Formatter"
