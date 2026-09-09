@@ -1,168 +1,311 @@
 import logging
-from datetime import datetime
+import os
+from dataclasses import dataclass
+from typing import Any
 
-try:
-    import markdown
-except ImportError:
-    markdown = None
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 
-from services.ai.ai_settings import AgentRole
-from services.ai.langgraph.state.training_analysis_state import TrainingAnalysisState
-from services.ai.model_config import ModelSelector
-from services.ai.utils.retry_handler import AI_ANALYSIS_CONFIG, retry_with_backoff
+from core.config import get_config
 
-from .tool_calling_helper import extract_text_content
+from .ai_settings import AgentRole, ai_settings
 
 logger = logging.getLogger(__name__)
 
-# Statisches HTML-Template mit isoliertem CSS-Block
-STATIC_HTML_TEMPLATE = """<!DOCTYPE html>
-<html lang="de">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Athletic Performance Analysis</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      line-height: 1.6;
-      color: #2c3e50;
-      margin: 0;
-      padding: 0;
-      background-color: #f8f9fa;
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+
+@dataclass
+class ModelConfiguration:
+    name: str
+    base_url: str
+    openrouter_name: str | None = None
+
+
+class ModelSelector:
+
+    @staticmethod
+    def _detect_provider(base_url: str) -> str:
+        if "anthropic" in base_url:
+            return "anthropic"
+        elif "openai.com" in base_url:
+            return "openai"
+        else:
+            return "openrouter"
+
+    CONFIGURATIONS: dict[str, ModelConfiguration] = {
+        # OpenAI Models
+        "gpt-4o": ModelConfiguration(
+            name="gpt-4o",
+            base_url="https://api.openai.com/v1",
+            openrouter_name="openai/gpt-4o",
+        ),
+        "gpt-4.1": ModelConfiguration(
+            name="gpt-4.1",
+            base_url="https://api.openai.com/v1",
+            openrouter_name="openai/gpt-4.1",
+        ),
+        "gpt-4.5": ModelConfiguration(
+            name="gpt-4.5-preview",
+            base_url="https://api.openai.com/v1",
+            openrouter_name="openai/gpt-4.5-preview",
+        ),
+        "gpt-4o-mini": ModelConfiguration(
+            name="gpt-4o-mini",
+            base_url="https://api.openai.com/v1",
+            openrouter_name="openai/gpt-4o-mini",
+        ),
+        "o1": ModelConfiguration(
+            name="o1-preview",
+            base_url="https://api.openai.com/v1",
+            openrouter_name="openai/o1-preview",
+        ),
+        "o1-mini": ModelConfiguration(
+            name="o1-mini",
+            base_url="https://api.openai.com/v1",
+            openrouter_name="openai/o1-mini",
+        ),
+        "o3": ModelConfiguration(
+            name="o3",
+            base_url="https://api.openai.com/v1",
+            openrouter_name="openai/o3",
+        ),
+        "o3-mini": ModelConfiguration(
+            name="o3-mini",
+            base_url="https://api.openai.com/v1",
+            openrouter_name="openai/o3-mini",
+        ),
+        "o4-mini": ModelConfiguration(
+            name="o4-mini",
+            base_url="https://api.openai.com/v1",
+            openrouter_name="openai/o4-mini",
+        ),
+        "gpt-5": ModelConfiguration(
+            name="gpt-5.2",
+            base_url="https://api.openai.com/v1",
+            openrouter_name="openai/gpt-5.2",
+        ),
+        "gpt-5.2-pro": ModelConfiguration(
+            name="gpt-5.2-pro",
+            base_url="https://api.openai.com/v1",
+            openrouter_name="openai/gpt-5.2-pro",
+        ),
+        "gpt-5-mini": ModelConfiguration(
+            name="gpt-5-mini",
+            base_url="https://api.openai.com/v1",
+            openrouter_name="openai/gpt-5-mini",
+        ),
+        "gpt-5-search": ModelConfiguration(
+            name="gpt-5.2",
+            base_url="https://api.openai.com/v1",
+            openrouter_name="openai/gpt-5.2",
+        ),
+        "gpt-5.2-pro-search": ModelConfiguration(
+            name="gpt-5.2-pro",
+            base_url="https://api.openai.com/v1",
+            openrouter_name="openai/gpt-5.2-pro",
+        ),
+        # Anthropic Models
+        "claude-4": ModelConfiguration(
+            name="claude-sonnet-4-5-20250929",
+            base_url="https://api.anthropic.com",
+            openrouter_name="anthropic/claude-sonnet-4.5",
+        ),
+        "claude-4-thinking": ModelConfiguration(
+            name="claude-sonnet-4-5-20250929",
+            base_url="https://api.anthropic.com",
+            openrouter_name="anthropic/claude-sonnet-4.5",
+        ),
+        "claude-opus": ModelConfiguration(
+            name="claude-opus-4-1-20250805",
+            base_url="https://api.anthropic.com",
+            openrouter_name="anthropic/claude-opus-4.1",
+        ),
+        "claude-opus-thinking": ModelConfiguration(
+            name="claude-opus-4-1-20250805",
+            base_url="https://api.anthropic.com",
+            openrouter_name="anthropic/claude-opus-4.1",
+        ),
+        "claude-3-haiku": ModelConfiguration(
+            name="claude-3-haiku-20240307",
+            base_url="https://api.anthropic.com",
+            openrouter_name="anthropic/claude-3-haiku",
+        ),
+        # DeepSeek Models
+        "deepseek-chat": ModelConfiguration(
+            name="openrouter/deepseek/deepseek-chat", base_url=OPENROUTER_BASE_URL
+        ),
+        "deepseek-reasoner": ModelConfiguration(
+            name="openrouter/deepseek/deepseek-r1", base_url=OPENROUTER_BASE_URL
+        ),
+        "deepseek-v3.2": ModelConfiguration(
+            name="deepseek/deepseek-v3.2", base_url=OPENROUTER_BASE_URL
+        ),
+        # Google Models (via OpenRouter)
+        "gemini-2.5-pro": ModelConfiguration(
+            name="google/gemini-2.5-pro", base_url=OPENROUTER_BASE_URL
+        ),
+        # xAI Models (via OpenRouter)
+        "grok-4": ModelConfiguration(
+            name="x-ai/grok-4", base_url=OPENROUTER_BASE_URL
+        ),
     }
-    .container {
-      max-width: 1000px;
-      margin: 30px auto;
-      padding: 40px;
-      background-color: #ffffff;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-      border-radius: 8px;
+
+    MODEL_CONFIGS: dict[str, dict[str, Any]] = {
+        "claude-opus-thinking": {
+            "max_tokens": 32000,
+            "thinking": {"type": "enabled", "budget_tokens": 16000},
+            "log": "Using extended thinking mode for {role} (max_tokens: 32000, budget_tokens: 16000)",
+        },
+        "claude-4-thinking": {
+            "max_tokens": 64000,
+            "thinking": {"type": "enabled", "budget_tokens": 16000},
+            "log": "Using extended thinking mode for {role} (max_tokens: 64000, budget_tokens: 16000)",
+        },
+        "claude-4": {
+            "max_tokens": 64000,
+            "log": "Using extended output tokens for {role} (max_tokens: 64000)",
+        },
+        "claude-opus": {
+            "max_tokens": 32000,
+            "log": "Using extended output tokens for {role} (max_tokens: 32000)",
+        },
+        "gpt-5": {
+            "use_responses_api": False,
+            "reasoning": {"effort": "xhigh"},
+            "model_kwargs": {"text": {"verbosity": "high"}},
+            "log": "Using GPT-5 with Responses API for {role} (verbosity: high, reasoning_effort: xhigh)",
+        },
+        "gpt-5.2-pro": {
+            "use_responses_api": False,
+            "reasoning": {"effort": "xhigh"},
+            "model_kwargs": {"text": {"verbosity": "high"}},
+            "log": "Using GPT-5.2 Pro with Responses API for {role} (verbosity: high, reasoning_effort: xhigh)",
+        },
+        "gpt-5-mini": {
+            "use_responses_api": False,
+            "reasoning": {"effort": "high"},
+            "model_kwargs": {"text": {"verbosity": "high"}},
+            "log": "Using GPT-5-mini with Responses API for {role} (verbosity: high, reasoning_effort: high)",
+        },
+        "gpt-5-search": {
+            "use_responses_api": False,
+            "reasoning": {"effort": "xhigh"},
+            "model_kwargs": {
+                "text": {"verbosity": "high"},
+                "tools": [{"type": "web_search"}],
+                "include": ["web_search_call.action.sources"],
+            },
+            "log": "Using GPT-5.2 with web search + Responses API for {role} (verbosity: high, reasoning_effort: xhigh)",
+        },
+        "gpt-5.2-pro-search": {
+            "use_responses_api": False,
+            "reasoning": {"effort": "xhigh"},
+            "model_kwargs": {
+                "text": {"verbosity": "high"},
+                "tools": [{"type": "web_search"}],
+                "include": ["web_search_call.action.sources"],
+            },
+            "log": "Using GPT-5.2 Pro with web search + Responses API for {role} (verbosity: high, reasoning_effort: xhigh)",
+        },
+        "deepseek-v3.2": {
+            "extra_body": {"reasoning": {"enabled": True}},
+            "log": "Using DeepSeek V3.2 with reasoning enabled for {role}",
+        },
     }
-    h1 {
-      color: #1a252f;
-      border-bottom: 2px solid #007bff;
-      padding-bottom: 10px;
-      margin-top: 0;
-    }
-    h2 {
-      color: #2c3e50;
-      margin-top: 25px;
-      border-bottom: 1px solid #e9ecef;
-      padding-bottom: 5px;
-    }
-    h3 {
-      color: #34495e;
-    }
-    ul, ol {
-      padding-left: 20px;
-    }
-    li {
-      margin-bottom: 8px;
-    }
-    p {
-      margin-bottom: 12px;
-    }
-    .content-body {
-      font-size: 15px;
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>Athletic Performance Analysis</h1>
-    <div class="content-body">
-      <!--CONTENT_PLACEHOLDER-->
-    </div>
-  </div>
-</body>
-</html>
-"""
 
-FORMATTER_SYSTEM_PROMPT = """You are a sports data assistant. Your sole task is to structure athletic performance insights into clean, structured Markdown text. Do NOT generate HTML tags, CSS styles, or layout blocks."""
+    @classmethod
+    def _apply_model_config(cls, model_name: str, role: AgentRole, llm_params: dict[str, Any]):
+        if model_name not in cls.MODEL_CONFIGS:
+            return
 
-# Sicherer String-Aufbau ohne Darstellungskonflikte im Chat
-_BT = "```"
-FORMATTER_USER_PROMPT_BASE = (
-    "Summarize and structure the following synthesis result into readable Markdown "
-    "with clear headings (##, ###), bullet points, and bold text. Do not write HTML or CSS tags.\n\n"
-    "## Content\n"
-    f"{_BT}markdown\n"
-    "{synthesis_result}\n"
-    f"{_BT}\n"
-)
+        config_data = cls.MODEL_CONFIGS[model_name].copy()
+        log_msg = config_data.pop("log", None)
+        llm_params.update(config_data)
+        if log_msg:
+            logger.info(str(log_msg).format(role=role.value))
 
-FORMATTER_PLOT_INSTRUCTIONS = """
-## Plot Integration
-- **Preserve**: Keep `[PLOT:plot_id]` references EXACTLY as written on a separate line.
-"""
-
-
-def _convert_markdown_to_html(md_text: str) -> str:
-    """Konvertiert Markdown in echtes HTML."""
-    if markdown:
-        return markdown.markdown(md_text, extensions=["tables", "fenced_code"])
-    
-    html_lines = []
-    for line in md_text.splitlines():
-        line_str = line.strip()
-        if line_str.startswith("## "):
-            html_lines.append(f"<h2>{line_str[3:]}</h2>")
-        elif line_str.startswith("### "):
-            html_lines.append(f"<h3>{line_str[4:]}</h3>")
-        elif line_str.startswith("- ") or line_str.startswith("* "):
-            html_lines.append(f"<li>{line_str[2:]}</li>")
-        elif line_str:
-            html_lines.append(f"<p>{line_str}</p>")
-    return "\n".join(html_lines)
-
-
-async def formatter_node(state: TrainingAnalysisState) -> dict[str, list | str]:
-    logger.info("Starting HTML formatter node")
-
-    try:
-        plotting_enabled = state.get("plotting_enabled", False)
-        logger.info(
-            "Formatter node: Plotting %s - %s plot integration instructions",
-            "enabled" if plotting_enabled else "disabled",
-            "including" if plotting_enabled else "no",
-        )
-
-        agent_start_time = datetime.now()
-
-        async def call_html_formatting():
-            synthesis_result = extract_text_content(state.get("synthesis_result", ""))
-
-            response = await ModelSelector.get_llm(AgentRole.FORMATTER).ainvoke([
-                {"role": "system", "content": FORMATTER_SYSTEM_PROMPT},
-                {"role": "user", "content": (
-                    FORMATTER_USER_PROMPT_BASE.format(synthesis_result=synthesis_result)
-                    + (FORMATTER_PLOT_INSTRUCTIONS if plotting_enabled else "")
-                )},
-            ])
-            raw_markdown = extract_text_content(response)
+    @classmethod
+    def get_llm(cls, role: AgentRole):
+        # --- 1. OLLAMA DIRECT OVERRIDE ---
+        # Dieser Block fängt jede Anfrage ab und leitet sie direkt an Ollama um,
+        # wenn in Docker Compose LLM_PROVIDER=ollama gesetzt ist.
+        provider_env = os.getenv("LLM_PROVIDER", "").lower()
+        if provider_env == "ollama":
+            ollama_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+            ollama_model = os.getenv("LLM_MODEL", "qwen2.5:3b")
             
-            content_html = _convert_markdown_to_html(raw_markdown)
-            return STATIC_HTML_TEMPLATE.replace("<!--CONTENT_PLACEHOLDER-->", content_html)
+            logger.info("OLLAMA OVERRIDE: Routing role %s to local Ollama (%s) at %s", role.value, ollama_model, ollama_url)
+            
+            return ChatOllama(
+                base_url=ollama_url,
+                model=ollama_model,
+                temperature=0.2,
+                num_ctx=4096,
+                num_predict=2048, #neu eingefügt, für bessere Hardware anpassen
+                repeat_penalty=1.2, # NEU: Verhindert textliche Wiederholungsschleifen
+                format="json"  # <-- WICHTIG: Aktiviert die native strukturierte JSON-Ausgabe
+            )
+        # ---------------------------------
 
-        analysis_html = await retry_with_backoff(
-            call_html_formatting, AI_ANALYSIS_CONFIG, "HTML Formatting"
-        )
+        # --- 2. ORIGINAL LOGIC (Fallback für andere Provider) ---
+        model_name = ai_settings.get_model_for_role(role)
+        selected_config = cls.CONFIGURATIONS.get(model_name)
+        if not selected_config:
+            raise RuntimeError(f"Unknown model '{model_name}' in configuration")
+        config = get_config()
 
-        execution_time = (datetime.now() - agent_start_time).total_seconds()
-        logger.info("HTML formatting completed in %.2fs", execution_time)
+        base_url = selected_config.base_url
+        final_model_name = selected_config.name
+        provider = cls._detect_provider(base_url)
 
-        return {
-            "analysis_html": analysis_html,
-            "costs": [
-                {
-                    "agent": "formatter",
-                    "execution_time": execution_time,
-                    "timestamp": datetime.now().isoformat(),
-                }
-            ],
+        key_map = {
+            "anthropic": config.anthropic_api_key,
+            "openai": config.openai_api_key,
+            "openrouter": config.openrouter_api_key,
         }
 
-    except Exception as exc:
-        logger.exception("Formatter node failed")
-        return {"errors": [f"HTML formatting failed: {exc!s}"]}
+        api_key = key_map.get(provider)
+        use_fallback = False
+
+        if not api_key and provider in ("anthropic", "openai"):
+            if not config.openrouter_api_key:
+                raise RuntimeError(f"{provider.title()} API key or OpenRouter API key is required")
+            if not selected_config.openrouter_name:
+                raise RuntimeError(
+                    f"{provider.title()} model {selected_config.name} is not available via OpenRouter; "
+                    f"provide an {provider.upper()}_API_KEY"
+                )
+            api_key = config.openrouter_api_key
+            base_url = OPENROUTER_BASE_URL
+            final_model_name = selected_config.openrouter_name
+            use_fallback = True
+            logger.info(
+                "Routing %s model %s through OpenRouter (no %s API key available)",
+                provider.title(),
+                selected_config.name,
+                provider.title(),
+            )
+        elif not api_key:
+            raise RuntimeError("OpenRouter API key is required for OpenRouter-hosted models")
+
+        logger.info("Configuring LLM for role %s with model %s", role.value, final_model_name)
+
+        llm_params: dict[str, Any] = {"model": final_model_name, "api_key": api_key}
+
+        cls._apply_model_config(model_name, role, llm_params)
+
+        if base_url == OPENROUTER_BASE_URL:
+            llm_params.pop("use_responses_api", None)
+            llm_params.pop("reasoning", None)
+            llm_params.pop("model_kwargs", None)
+            llm_params.pop("extra_body", None)
+            if provider == "anthropic":
+                llm_params.pop("thinking", None)
+
+        if provider == "anthropic" and not use_fallback:
+            return ChatAnthropic(**llm_params)
+
+        llm_params["base_url"] = base_url
+        return ChatOpenAI(**llm_params)
