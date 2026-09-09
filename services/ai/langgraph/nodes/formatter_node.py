@@ -1,6 +1,11 @@
 import logging
 from datetime import datetime
 
+try:
+    import markdown
+except ImportError:
+    markdown = None
+
 from services.ai.ai_settings import AgentRole
 from services.ai.langgraph.state.training_analysis_state import TrainingAnalysisState
 from services.ai.model_config import ModelSelector
@@ -10,36 +15,106 @@ from .tool_calling_helper import extract_text_content
 
 logger = logging.getLogger(__name__)
 
-FORMATTER_SYSTEM_PROMPT = """You are a design technologist.
-## Goal
-Create beautiful, functional HTML documents for athletic performance data.
-## Principles
-- Clarity: Design for instant understanding.
-- Hierarchy: Use visual structure to guide attention.
-- Aesthetics: Balance beauty with function."""
+# Statisches HTML-Template mit isoliertem CSS-Block
+STATIC_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Athletic Performance Analysis</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      color: #2c3e50;
+      margin: 0;
+      padding: 0;
+      background-color: #f8f9fa;
+    }
+    .container {
+      max-width: 1000px;
+      margin: 30px auto;
+      padding: 40px;
+      background-color: #ffffff;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+      border-radius: 8px;
+    }
+    h1 {
+      color: #1a252f;
+      border-bottom: 2px solid #007bff;
+      padding-bottom: 10px;
+      margin-top: 0;
+    }
+    h2 {
+      color: #2c3e50;
+      margin-top: 25px;
+      border-bottom: 1px solid #e9ecef;
+      padding-bottom: 5px;
+    }
+    h3 {
+      color: #34495e;
+    }
+    ul, ol {
+      padding-left: 20px;
+    }
+    li {
+      margin-bottom: 8px;
+    }
+    p {
+      margin-bottom: 12px;
+    }
+    .content-body {
+      font-size: 15px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Athletic Performance Analysis</h1>
+    <div class="content-body">
+      <!--CONTENT_PLACEHOLDER-->
+    </div>
+  </div>
+</body>
+</html>
+"""
 
-FORMATTER_USER_PROMPT_BASE = """Transform this content into a beautiful HTML document.
+FORMATTER_SYSTEM_PROMPT = """You are a sports data assistant. Your sole task is to structure athletic performance insights into clean, structured Markdown text. Do NOT generate HTML tags, CSS styles, or layout blocks."""
 
-## Content
-```markdown
-{synthesis_result}
-```
-
-## Task
-Create a complete HTML document with:
-1. **Structure**: Logical organization with clear headings.
-2. **Design**: Clean CSS, responsive layout, professional typography.
-3. **Visuals**: Use emojis and color to enhance data (e.g., 🎯 goals, 📊 metrics).
-4. **Completeness**: Include ALL content, metrics, and scores.
-
-## Output
-Return ONLY the complete HTML document."""
+# Sicherer String-Aufbau ohne Darstellungskonflikte im Chat
+_BT = "```"
+FORMATTER_USER_PROMPT_BASE = (
+    "Summarize and structure the following synthesis result into readable Markdown "
+    "with clear headings (##, ###), bullet points, and bold text. Do not write HTML or CSS tags.\n\n"
+    "## Content\n"
+    f"{_BT}markdown\n"
+    "{synthesis_result}\n"
+    f"{_BT}\n"
+)
 
 FORMATTER_PLOT_INSTRUCTIONS = """
 ## Plot Integration
-- **Preserve**: Keep `[PLOT:plot_id]` references EXACTLY as written.
-- **Layout**: Treat them as major visual blocks (full-width).
-- **Spacing**: Ensure CSS provides vertical space (~500px) for the interactive charts that will replace them."""
+- **Preserve**: Keep `[PLOT:plot_id]` references EXACTLY as written on a separate line.
+"""
+
+
+def _convert_markdown_to_html(md_text: str) -> str:
+    """Konvertiert Markdown in echtes HTML."""
+    if markdown:
+        return markdown.markdown(md_text, extensions=["tables", "fenced_code"])
+    
+    html_lines = []
+    for line in md_text.splitlines():
+        line_str = line.strip()
+        if line_str.startswith("## "):
+            html_lines.append(f"<h2>{line_str[3:]}</h2>")
+        elif line_str.startswith("### "):
+            html_lines.append(f"<h3>{line_str[4:]}</h3>")
+        elif line_str.startswith("- ") or line_str.startswith("* "):
+            html_lines.append(f"<li>{line_str[2:]}</li>")
+        elif line_str:
+            html_lines.append(f"<p>{line_str}</p>")
+    return "\n".join(html_lines)
 
 
 async def formatter_node(state: TrainingAnalysisState) -> dict[str, list | str]:
@@ -65,7 +140,10 @@ async def formatter_node(state: TrainingAnalysisState) -> dict[str, list | str]:
                     + (FORMATTER_PLOT_INSTRUCTIONS if plotting_enabled else "")
                 )},
             ])
-            return extract_text_content(response)
+            raw_markdown = extract_text_content(response)
+            
+            content_html = _convert_markdown_to_html(raw_markdown)
+            return STATIC_HTML_TEMPLATE.replace("<!--CONTENT_PLACEHOLDER-->", content_html)
 
         analysis_html = await retry_with_backoff(
             call_html_formatting, AI_ANALYSIS_CONFIG, "HTML Formatting"
