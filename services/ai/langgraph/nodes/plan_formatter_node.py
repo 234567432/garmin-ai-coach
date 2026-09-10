@@ -15,7 +15,6 @@ from .tool_calling_helper import extract_text_content
 
 logger = logging.getLogger(__name__)
 
-# Statisches HTML-Template mit CSS für kompaktes Layout, Tabellen und Checkboxen
 STATIC_PLANNING_HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="de">
 <head>
@@ -110,14 +109,14 @@ STATIC_PLANNING_HTML_TEMPLATE = """<!DOCTYPE html>
 
 PLAN_FORMATTER_SYSTEM_PROMPT = """You are a sports data assistant. Your sole task is to structure training plans into clean, structured Markdown text.
 Use clear headings (##, ###), tables for weekly schedules, and task list items (- [ ]) for workouts and sub-tasks.
-Do NOT generate HTML tags, CSS styles, or layout blocks."""
+STRICT RULE: Do NOT output raw JSON objects, JSON brackets {}, or HTML/CSS tags directly."""
 
 _BT = "```"
 PLAN_FORMATTER_USER_PROMPT_BASE = (
     "Transform the following training plan inputs into readable Markdown.\n"
     "Structure into Section 1 (Season Plan Overview) and Section 2 (4-Week Plan).\n"
     "Use Markdown tables where applicable and task list items (- [ ]) for actionable workouts.\n"
-    "Do not write HTML or CSS tags.\n\n"
+    "Do not write raw JSON, HTML, or CSS tags.\n\n"
     "## Season Plan\n"
     f"{_BT}markdown\n"
     "{season_plan}\n"
@@ -147,7 +146,6 @@ def _convert_markdown_to_html(md_text: str) -> str:
                 html_lines.append(f"<p>{line_str}</p>")
         html = "\n".join(html_lines)
 
-    # Wandelt Markdown-Tasklisten (- [ ]) in echte HTML-Checkboxen um
     html = html.replace("[ ] ", '<label><input type="checkbox"> ')
     html = html.replace("[x] ", '<label><input type="checkbox" checked> ')
     return html
