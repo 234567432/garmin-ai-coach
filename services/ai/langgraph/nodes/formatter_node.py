@@ -15,7 +15,6 @@ from .tool_calling_helper import extract_text_content
 
 logger = logging.getLogger(__name__)
 
-# Statisches HTML-Template mit isoliertem CSS-Block
 STATIC_HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="de">
 <head>
@@ -53,12 +52,50 @@ STATIC_HTML_TEMPLATE = """<!DOCTYPE html>
     }
     h3 {
       color: #34495e;
+      margin-top: 15px;
+    }
+    blockquote {
+      background-color: #eef6ff;
+      border-left: 4px solid #007bff;
+      margin: 15px 0;
+      padding: 12px 18px;
+      border-radius: 0 6px 6px 0;
     }
     ul, ol {
       padding-left: 20px;
     }
     li {
       margin-bottom: 8px;
+    }
+    label {
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: #007bff;
+      cursor: pointer;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 20px 0;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid #dee2e6;
+      padding: 10px 12px;
+      text-align: left;
+    }
+    th {
+      background-color: #f1f3f5;
+      color: #1a252f;
+    }
+    tr:nth-child(even) {
+      background-color: #f8f9fa;
     }
     p {
       margin-bottom: 12px;
@@ -79,13 +116,21 @@ STATIC_HTML_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
-FORMATTER_SYSTEM_PROMPT = """You are a sports data assistant. Your sole task is to structure athletic performance insights into clean, structured Markdown text. Do NOT generate HTML tags, CSS styles, or layout blocks."""
+FORMATTER_SYSTEM_PROMPT = """You are a sports data assistant.
+Your task is to structure athletic performance analysis results into clean, readable Markdown text.
 
-# Sicherer String-Aufbau ohne Darstellungskonflikte im Chat
+STRICT RULES:
+1. Do NOT output raw JSON, curly braces {}, or json code blocks.
+2. Unpack JSON fields into natural Markdown headers (##, ###), tables, blockquotes (>), or bullet lists.
+3. Represent key performance indicators (KPIs) as Markdown tables where applicable.
+4. Use task list items (- [ ]) for actionable recommendations.
+5. Do NOT write HTML or CSS tags directly."""
+
 _BT = "```"
 FORMATTER_USER_PROMPT_BASE = (
-    "Summarize and structure the following synthesis result into readable Markdown "
-    "with clear headings (##, ###), bullet points, and bold text. Do not write HTML or CSS tags.\n\n"
+    "Transform the following synthesis result into clean Markdown with clear headings (##, ###), "
+    "Markdown tables, bullet points, and task lists (- [ ]).\n"
+    "Do not output raw JSON strings or HTML code.\n\n"
     "## Content\n"
     f"{_BT}markdown\n"
     "{synthesis_result}\n"
@@ -94,27 +139,33 @@ FORMATTER_USER_PROMPT_BASE = (
 
 FORMATTER_PLOT_INSTRUCTIONS = """
 ## Plot Integration
-- **Preserve**: Keep `[PLOT:plot_id]` references EXACTLY as written on a separate line.
+- Keep `[PLOT:plot_id]` references EXACTLY as written on a separate line.
 """
 
 
 def _convert_markdown_to_html(md_text: str) -> str:
-    """Konvertiert Markdown in echtes HTML."""
+    """Konvertiert Markdown in HTML und erzeugt interaktive Checkboxen."""
     if markdown:
-        return markdown.markdown(md_text, extensions=["tables", "fenced_code"])
-    
-    html_lines = []
-    for line in md_text.splitlines():
-        line_str = line.strip()
-        if line_str.startswith("## "):
-            html_lines.append(f"<h2>{line_str[3:]}</h2>")
-        elif line_str.startswith("### "):
-            html_lines.append(f"<h3>{line_str[4:]}</h3>")
-        elif line_str.startswith("- ") or line_str.startswith("* "):
-            html_lines.append(f"<li>{line_str[2:]}</li>")
-        elif line_str:
-            html_lines.append(f"<p>{line_str}</p>")
-    return "\n".join(html_lines)
+        html = markdown.markdown(md_text, extensions=["tables", "fenced_code"])
+    else:
+        html_lines = []
+        for line in md_text.splitlines():
+            line_str = line.strip()
+            if line_str.startswith("## "):
+                html_lines.append(f"<h2>{line_str[3:]}</h2>")
+            elif line_str.startswith("### "):
+                html_lines.append(f"<h3>{line_str[4:]}</h3>")
+            elif line_str.startswith("- ") or line_str.startswith("* "):
+                html_lines.append(f"<li>{line_str[2:]}</li>")
+            elif line_str.startswith("> "):
+                html_lines.append(f"<blockquote>{line_str[2:]}</blockquote>")
+            elif line_str:
+                html_lines.append(f"<p>{line_str}</p>")
+        html = "\n".join(html_lines)
+
+    html = html.replace("[ ] ", '<label><input type="checkbox"> ')
+    html = html.replace("[x] ", '<label><input type="checkbox" checked> ')
+    return html
 
 
 async def formatter_node(state: TrainingAnalysisState) -> dict[str, list | str]:
@@ -122,12 +173,6 @@ async def formatter_node(state: TrainingAnalysisState) -> dict[str, list | str]:
 
     try:
         plotting_enabled = state.get("plotting_enabled", False)
-        logger.info(
-            "Formatter node: Plotting %s - %s plot integration instructions",
-            "enabled" if plotting_enabled else "disabled",
-            "including" if plotting_enabled else "no",
-        )
-
         agent_start_time = datetime.now()
 
         async def call_html_formatting():
@@ -141,7 +186,7 @@ async def formatter_node(state: TrainingAnalysisState) -> dict[str, list | str]:
                 )},
             ])
             raw_markdown = extract_text_content(response)
-            
+
             content_html = _convert_markdown_to_html(raw_markdown)
             return STATIC_HTML_TEMPLATE.replace("<!--CONTENT_PLACEHOLDER-->", content_html)
 
