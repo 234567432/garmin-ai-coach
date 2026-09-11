@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import datetime
 
@@ -116,31 +117,73 @@ STATIC_HTML_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
-FORMATTER_SYSTEM_PROMPT = """You are a sports data assistant.
-Your task is to structure athletic performance analysis results into clean, readable Markdown text.
+def parse_json_to_markdown(raw_input: str) -> str:
+    """Parst JSON-Strukturen deterministisch in sauberes Markdown."""
+    try:
+        # Falls der String von Markdown-Code-Blocks umschlossen ist (```json ...)
+        clean_input = raw_input.strip()
+        if clean_input.startswith("```"):
+            clean_input = clean_input.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
-STRICT RULES:
-1. Do NOT output raw JSON, curly braces {}, or json code blocks.
-2. Unpack JSON fields into natural Markdown headers (##, ###), tables, blockquotes (>), or bullet lists.
-3. Represent key performance indicators (KPIs) as Markdown tables where applicable.
-4. Use task list items (- [ ]) for actionable recommendations.
-5. Do NOT write HTML or CSS tags directly."""
+        data = json.loads(clean_input)
+    except Exception:
+        # Falls kein JSON vorliegt, unberührt zurückgeben
+        return raw_input
 
-_BT = "```"
-FORMATTER_USER_PROMPT_BASE = (
-    "Transform the following synthesis result into clean Markdown with clear headings (##, ###), "
-    "Markdown tables, bullet points, and task lists (- [ ]).\n"
-    "Do not output raw JSON strings or HTML code.\n\n"
-    "## Content\n"
-    f"{_BT}markdown\n"
-    "{synthesis_result}\n"
-    f"{_BT}\n"
-)
+    if not isinstance(data, dict):
+        return raw_input
 
-FORMATTER_PLOT_INSTRUCTIONS = """
-## Plot Integration
-- Keep `[PLOT:plot_id]` references EXACTLY as written on a separate line.
-"""
+    if "output" in data and isinstance(data["output"], dict):
+        data = data["output"]
+
+    md_lines = []
+
+    for key, value in data.items():
+        section_title = key.replace("_", " ").title()
+
+        if isinstance(value, dict):
+            md_lines.append(f"## {section_title}\n")
+            for sub_key, sub_val in value.items():
+                sub_title = sub_key.replace("_", " ").title()
+
+                if isinstance(sub_val, list):
+                    md_lines.append(f"### {sub_title}")
+                    if sub_val and isinstance(sub_val[0], dict):
+                        # Tabelle für Liste von Dicts (z. B. Metrics/KPIs)
+                        headers = list(sub_val[0].keys())
+                        md_lines.append("| " + " | ".join([h.replace("_", " ").title() for h in headers]) + " |")
+                        md_lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+                        for item in sub_val:
+                            row = [str(item.get(h, "")) for h in headers]
+                            md_lines.append("| " + " | ".join(row) + " |")
+                        md_lines.append("")
+                    else:
+                        for item in sub_val:
+                            clean_item = str(item).lstrip("- ")
+                            md_lines.append(f"- {clean_item}")
+                        md_lines.append("")
+                else:
+                    md_lines.append(f"**{sub_title}:** {sub_val}\n")
+
+        elif isinstance(value, list):
+            md_lines.append(f"## {section_title}")
+            if value and isinstance(value[0], dict):
+                headers = list(value[0].keys())
+                md_lines.append("| " + " | ".join([h.replace("_", " ").title() for h in headers]) + " |")
+                md_lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+                for item in value:
+                    row = [str(item.get(h, "")) for h in headers]
+                    md_lines.append("| " + " | ".join(row) + " |")
+                md_lines.append("")
+            else:
+                for item in value:
+                    clean_item = str(item).lstrip("- ")
+                    md_lines.append(f"- {clean_item}")
+                md_lines.append("")
+        else:
+            md_lines.append(f"## {section_title}\n{value}\n")
+
+    return "\n".join(md_lines)
 
 
 def _convert_markdown_to_html(md_text: str) -> str:
@@ -172,22 +215,16 @@ async def formatter_node(state: TrainingAnalysisState) -> dict[str, list | str]:
     logger.info("Starting HTML formatter node")
 
     try:
-        plotting_enabled = state.get("plotting_enabled", False)
         agent_start_time = datetime.now()
 
         async def call_html_formatting():
             synthesis_result = extract_text_content(state.get("synthesis_result", ""))
 
-            response = await ModelSelector.get_llm(AgentRole.FORMATTER).ainvoke([
-                {"role": "system", "content": FORMATTER_SYSTEM_PROMPT},
-                {"role": "user", "content": (
-                    FORMATTER_USER_PROMPT_BASE.format(synthesis_result=synthesis_result)
-                    + (FORMATTER_PLOT_INSTRUCTIONS if plotting_enabled else "")
-                )},
-            ])
-            raw_markdown = extract_text_content(response)
+            # 1. JSON-Struktur deterministisch in Markdown auflösen
+            markdown_content = parse_json_to_markdown(synthesis_result)
 
-            content_html = _convert_markdown_to_html(raw_markdown)
+            # 2. Markdown in HTML konvertieren
+            content_html = _convert_markdown_to_html(markdown_content)
             return STATIC_HTML_TEMPLATE.replace("<!--CONTENT_PLACEHOLDER-->", content_html)
 
         analysis_html = await retry_with_backoff(
