@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import datetime
 
@@ -6,12 +7,7 @@ try:
 except ImportError:
     markdown = None
 
-from services.ai.ai_settings import AgentRole
 from services.ai.langgraph.state.training_analysis_state import TrainingAnalysisState
-from services.ai.model_config import ModelSelector
-from services.ai.utils.retry_handler import AI_ANALYSIS_CONFIG, retry_with_backoff
-
-from .tool_calling_helper import extract_text_content
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +49,10 @@ STATIC_PLANNING_HTML_TEMPLATE = """<!DOCTYPE html>
     h3 {
       color: #34495e;
       margin-top: 15px;
+    }
+    h4 {
+      color: #495057;
+      margin-top: 10px;
     }
     ul {
       padding-left: 20px;
@@ -107,25 +107,91 @@ STATIC_PLANNING_HTML_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
-PLAN_FORMATTER_SYSTEM_PROMPT = """You are a sports data assistant. Your sole task is to structure training plans into clean, structured Markdown text.
-Use clear headings (##, ###), tables for weekly schedules, and task list items (- [ ]) for workouts and sub-tasks.
-STRICT RULE: Do NOT output raw JSON objects, JSON brackets {}, or HTML/CSS tags directly."""
+def parse_json_to_markdown(raw_input) -> str:
+    """Parst JSON-Strukturen (Strings, Dicts oder Listen) deterministisch in sauberes Markdown."""
+    if not raw_input:
+        return ""
 
-_BT = "```"
-PLAN_FORMATTER_USER_PROMPT_BASE = (
-    "Transform the following training plan inputs into readable Markdown.\n"
-    "Structure into Section 1 (Season Plan Overview) and Section 2 (4-Week Plan).\n"
-    "Use Markdown tables where applicable and task list items (- [ ]) for actionable workouts.\n"
-    "Do not write raw JSON, HTML, or CSS tags.\n\n"
-    "## Season Plan\n"
-    f"{_BT}markdown\n"
-    "{season_plan}\n"
-    f"{_BT}\n\n"
-    "## 4-Week Plan\n"
-    f"{_BT}markdown\n"
-    "{weekly_plan}\n"
-    f"{_BT}\n"
-)
+    data = raw_input
+    if isinstance(raw_input, str):
+        clean_input = raw_input.strip()
+        if clean_input.startswith("```"):
+            clean_input = clean_input.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        try:
+            data = json.loads(clean_input)
+        except Exception:
+            # Reiner Text (bereits Markdown)
+            return raw_input
+
+    if not isinstance(data, (dict, list)):
+        return str(raw_input)
+
+    if isinstance(data, dict) and "output" in data and isinstance(data["output"], (dict, list)):
+        data = data["output"]
+
+    md_lines = []
+
+    if isinstance(data, dict):
+        for key, value in data.items():
+            section_title = key.replace("_", " ").title()
+
+            if isinstance(value, dict):
+                md_lines.append(f"### {section_title}\n")
+                for sub_key, sub_val in value.items():
+                    sub_title = sub_key.replace("_", " ").title()
+
+                    if isinstance(sub_val, list):
+                        md_lines.append(f"#### {sub_title}")
+                        if sub_val and isinstance(sub_val[0], dict):
+                            headers = list(sub_val[0].keys())
+                            md_lines.append("| " + " | ".join([h.replace("_", " ").title() for h in headers]) + " |")
+                            md_lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+                            for item in sub_val:
+                                row = [str(item.get(h, "")) for h in headers]
+                                md_lines.append("| " + " | ".join(row) + " |")
+                            md_lines.append("")
+                        else:
+                            for item in sub_val:
+                                clean_item = str(item).lstrip("- ")
+                                md_lines.append(f"- [ ] {clean_item}")
+                            md_lines.append("")
+                    else:
+                        md_lines.append(f"**{sub_title}:** {sub_val}\n")
+
+            elif isinstance(value, list):
+                md_lines.append(f"### {section_title}")
+                if value and isinstance(value[0], dict):
+                    headers = list(value[0].keys())
+                    md_lines.append("| " + " | ".join([h.replace("_", " ").title() for h in headers]) + " |")
+                    md_lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+                    for item in value:
+                        row = [str(item.get(h, "")) for h in headers]
+                        md_lines.append("| " + " | ".join(row) + " |")
+                    md_lines.append("")
+                else:
+                    for item in value:
+                        clean_item = str(item).lstrip("- ")
+                        md_lines.append(f"- [ ] {clean_item}")
+                    md_lines.append("")
+            else:
+                md_lines.append(f"### {section_title}\n{value}\n")
+
+    elif isinstance(data, list):
+        if data and isinstance(data[0], dict):
+            headers = list(data[0].keys())
+            md_lines.append("| " + " | ".join([h.replace("_", " ").title() for h in headers]) + " |")
+            md_lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+            for item in data:
+                row = [str(item.get(h, "")) for h in headers]
+                md_lines.append("| " + " | ".join(row) + " |")
+            md_lines.append("")
+        else:
+            for item in data:
+                clean_item = str(item).lstrip("- ")
+                md_lines.append(f"- [ ] {clean_item}")
+            md_lines.append("")
+
+    return "\n".join(md_lines)
 
 
 def _convert_markdown_to_html(md_text: str) -> str:
@@ -140,6 +206,8 @@ def _convert_markdown_to_html(md_text: str) -> str:
                 html_lines.append(f"<h2>{line_str[3:]}</h2>")
             elif line_str.startswith("### "):
                 html_lines.append(f"<h3>{line_str[4:]}</h3>")
+            elif line_str.startswith("#### "):
+                html_lines.append(f"<h4>{line_str[5:]}</h4>")
             elif line_str.startswith("- ") or line_str.startswith("* "):
                 html_lines.append(f"<li>{line_str[2:]}</li>")
             elif line_str:
@@ -168,25 +236,24 @@ async def plan_formatter_node(state: TrainingAnalysisState) -> dict[str, list | 
                 return value.get("output", value.get("content", value))
             return value
 
-        async def call_plan_formatting():
-            season_plan = get_content("season_plan")
-            weekly_plan = get_content("weekly_plan")
+        season_plan_raw = get_content("season_plan")
+        weekly_plan_raw = get_content("weekly_plan")
 
-            response = await ModelSelector.get_llm(AgentRole.FORMATTER).ainvoke([
-                {"role": "system", "content": PLAN_FORMATTER_SYSTEM_PROMPT},
-                {"role": "user", "content": PLAN_FORMATTER_USER_PROMPT_BASE.format(
-                    season_plan=season_plan,
-                    weekly_plan=weekly_plan
-                )},
-            ])
-            raw_markdown = extract_text_content(response)
+        # 1. Beide Pläne deterministisch aus JSON/Dict in Markdown wandeln
+        season_md = parse_json_to_markdown(season_plan_raw)
+        weekly_md = parse_json_to_markdown(weekly_plan_raw)
 
-            content_html = _convert_markdown_to_html(raw_markdown)
-            return STATIC_PLANNING_HTML_TEMPLATE.replace("<!--CONTENT_PLACEHOLDER-->", content_html)
-
-        planning_html = await retry_with_backoff(
-            call_plan_formatting, AI_ANALYSIS_CONFIG, "Plan Formatter"
+        # 2. Abschnitte zusammenbauen
+        full_md = (
+            "## Section 1: Season Plan Overview\n\n"
+            f"{season_md}\n\n"
+            "## Section 2: 4-Week Plan\n\n"
+            f"{weekly_md}"
         )
+
+        # 3. In HTML konvertieren
+        content_html = _convert_markdown_to_html(full_md)
+        planning_html = STATIC_PLANNING_HTML_TEMPLATE.replace("<!--CONTENT_PLACEHOLDER-->", content_html)
 
         execution_time = (datetime.now() - agent_start_time).total_seconds()
         logger.info("Plan formatting completed in %.2fs", execution_time)
