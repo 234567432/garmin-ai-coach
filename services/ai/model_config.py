@@ -233,8 +233,8 @@ class ModelSelector:
         # wenn in Docker Compose LLM_PROVIDER=ollama gesetzt ist.
         provider_env = os.getenv("LLM_PROVIDER", "").lower()
         if provider_env == "ollama":
-            ollama_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-            ollama_model = os.getenv("LLM_MODEL", "qwen2.5:3b")
+            ollama_url = os.getenv("OLLAMA_BASE_URL", "http://192.168.1.4:11434")
+            ollama_model = os.getenv("LLM_MODEL", "llama3.1:8b-16k")
             
             logger.info("OLLAMA OVERRIDE: Routing role %s to local Ollama (%s) at %s", role.value, ollama_model, ollama_url)
             
@@ -242,8 +242,8 @@ class ModelSelector:
                 base_url=ollama_url,
                 model=ollama_model,
                 temperature=0.2,
-                num_ctx=4096,
-                num_predict=2048, #neu eingefügt, für bessere Hardware anpassen
+                num_ctx=16384,
+                num_predict=8192, #neu eingefügt, für bessere Hardware anpassen
                 repeat_penalty=1.2, # NEU: Verhindert textliche Wiederholungsschleifen
                 format="json"  # <-- WICHTIG: Aktiviert die native strukturierte JSON-Ausgabe
             )
