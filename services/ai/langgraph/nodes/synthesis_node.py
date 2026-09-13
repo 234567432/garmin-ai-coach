@@ -93,29 +93,25 @@ async def synthesis_node(state: TrainingAnalysisState) -> dict[str, list | str]:
                 user_answers_block = str(raw_answers)
         else:
             user_answers_block = "No direct feedback provided by athlete for this run."
-
         async def call_synthesis_analysis():
-            return await handle_tool_calling_in_node(
-                llm_with_tools=ModelSelector.get_llm(AgentRole.SYNTHESIS).bind_tools([]),
-                messages=[
-                    {"role": "system", "content": (
-                        SYNTHESIS_SYSTEM_PROMPT_BASE + (SYNTHESIS_PLOT_INSTRUCTIONS if plotting_enabled else "")
-                    )},
-                    {"role": "user", "content": (
-                        SYNTHESIS_USER_PROMPT_BASE.format(
-                            athlete_name=state.get("athlete_name", "Athlete"),
-                            metrics_result=extract_expert_output(state.get("metrics_outputs"), "for_synthesis"),
-                            activity_result=extract_expert_output(state.get("activity_outputs"), "for_synthesis"),
-                            physiology_result=extract_expert_output(state.get("physiology_outputs"), "for_synthesis"),
-                            user_answers_block=user_answers_block,
-                            competitions=json.dumps(state.get("competitions", []), indent=2),
-                            current_date=json.dumps(state.get("current_date", ""), indent=2),
-                            style_guide=state.get("style_guide", ""),
-                        ) + (SYNTHESIS_USER_PLOT_INSTRUCTIONS if plotting_enabled else "")
-                    )},
-                ],
-                tools=[],
-                max_iterations=3,
+            llm = ModelSelector.get_llm(AgentRole.SYNTHESIS)
+            system_content = SYNTHESIS_SYSTEM_PROMPT_BASE + (SYNTHESIS_PLOT_INSTRUCTIONS if plotting_enabled else "")
+            user_content = SYNTHESIS_USER_PROMPT_BASE.format(
+                athlete_name=state.get("athlete_name", "Athlete"),
+                metrics_result=extract_expert_output(state.get("metrics_outputs"), "for_synthesis"),
+                activity_result=extract_expert_output(state.get("activity_outputs"), "for_synthesis"),
+                physiology_result=extract_expert_output(state.get("physiology_outputs"), "for_synthesis"),
+                user_answers_block=user_answers_block,
+                competitions=json.dumps(state.get("competitions", []), indent=2),
+                current_date=json.dumps(state.get("current_date", ""), indent=2),
+                style_guide=state.get("style_guide", ""),
+            ) + (SYNTHESIS_USER_PLOT_INSTRUCTIONS if plotting_enabled else "")
+
+            response = await llm.ainvoke([
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_content}
+            ])
+            return response.content
             )
         synthesis_result = await retry_with_backoff(
             call_synthesis_analysis, AI_ANALYSIS_CONFIG, "Synthesis Analysis with Tools"
