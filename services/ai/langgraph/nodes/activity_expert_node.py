@@ -75,6 +75,11 @@ Produce 3 structured fields. For EACH field, use this internal layout:
 - **Freedom**: define constraints, opportunities, and session load hints as needed.
 - **CRITICAL**: Do NOT propose a schedule. Provide rules and building blocks."""
 
+PLOT_MUST_CALL_INSTRUCTION = """
+## CRITICAL TOOL REQUIREMENT
+You MUST call the plot creation tool at least once to generate a chart visualizing activity distributions, pace, or power trends before producing your final structured answer.
+"""
+
 ACTIVITY_FINAL_CHECKLIST = """
 ## Final Checklist
 - Use Signals/Evidence/Implications/Uncertainty per receiver.
