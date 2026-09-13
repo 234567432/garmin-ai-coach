@@ -129,6 +129,19 @@ async def weekly_planner_node(state: TrainingAnalysisState) -> dict[str, list | 
                 tools=tools,
                 max_iterations=15,
             )
+        
+        response = await base_llm.ainvoke(messages_with_qa)
+        content_text = response.content if hasattr(response, "content") else str(response)
+        return AgentOutput(content=content_text)
+#    async def call_weekly_planning():
+#        messages_with_qa = base_messages + qa_messages
+#        if tools:
+#            return await handle_tool_calling_in_node(
+#                llm_with_tools=llm_with_structure,
+#                messages=messages_with_qa,
+#                tools=tools,
+#                max_iterations=15,
+#            )
         return await llm_with_structure.ainvoke(messages_with_qa)
 
     async def node_execution():
