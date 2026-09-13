@@ -112,7 +112,7 @@ async def synthesis_node(state: TrainingAnalysisState) -> dict[str, list | str]:
                 {"role": "user", "content": user_content}
             ])
             return response.content
-            )
+            
         synthesis_result = await retry_with_backoff(
             call_synthesis_analysis, AI_ANALYSIS_CONFIG, "Synthesis Analysis with Tools"
         )
