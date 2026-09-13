@@ -107,6 +107,11 @@ METRICS_FINAL_CHECKLIST = """
 - No prescriptions for specific workouts.
 """
 
+PLOT_MUST_CALL_INSTRUCTION = """
+## CRITICAL TOOL REQUIREMENT
+You MUST call the plot creation tool at least once to generate a chart visualizing training load trends or VO2max progression before producing your final structured answer.
+"""
+
 async def metrics_expert_node(state: TrainingAnalysisState) -> dict[str, list | str | dict]:
     logger.info("Starting metrics expert analysis node")
 
@@ -130,6 +135,7 @@ async def metrics_expert_node(state: TrainingAnalysisState) -> dict[str, list | 
         get_workflow_context("metrics")
         + METRICS_SYSTEM_PROMPT_BASE
         + (get_plotting_instructions("metrics") if plotting_enabled else "")
+        + (PLOT_MUST_CALL_INSTRUCTION if plotting_enabled else "")
         + (get_hitl_instructions("metrics") if hitl_enabled else "")
         + METRICS_FINAL_CHECKLIST
     )
@@ -157,12 +163,15 @@ async def metrics_expert_node(state: TrainingAnalysisState) -> dict[str, list | 
             },
         ]
 
-        return await handle_tool_calling_in_node(
-            llm_with_tools=llm_with_structure,
-            messages=base_messages + qa_messages,
-            tools=tools,
-            max_iterations=15,
-        )
+        if tools:
+            return await handle_tool_calling_in_node(
+                llm_with_tools=llm_with_structure,
+                messages=base_messages + qa_messages,
+                tools=tools,
+                max_iterations=15,
+            )
+        else:
+            return await llm_with_structure.ainvoke(base_messages + qa_messages)
 
     async def node_execution():
         agent_output = await retry_with_backoff(
