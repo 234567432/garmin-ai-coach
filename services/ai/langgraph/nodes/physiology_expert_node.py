@@ -74,6 +74,11 @@ Produce 3 structured fields. For EACH field, use this internal layout:
 - **Goal**: Provide readiness guidance.
 - **Freedom**: Speak in **readiness corridors** (e.g., "High readiness, go for overload" or "Sympathetic dominance, limit intensity")."""
 
+PLOT_MUST_CALL_INSTRUCTION = """
+## CRITICAL TOOL REQUIREMENT
+You MUST call the plot creation tool at least once to generate a chart visualizing physiological metrics (HRV, resting heart rate, or sleep recovery) before producing your final structured answer.
+"""
+
 PHYSIOLOGY_FINAL_CHECKLIST = """
 ## Final Checklist
 - Use Signals/Evidence/Implications/Uncertainty per receiver.
@@ -104,6 +109,7 @@ async def physiology_expert_node(state: TrainingAnalysisState) -> dict[str, list
         get_workflow_context("physiology")
         + PHYSIOLOGY_SYSTEM_PROMPT_BASE
         + (get_plotting_instructions("physiology") if plotting_enabled else "")
+        + (PLOT_MUST_CALL_INSTRUCTION if plotting_enabled else "")
         + (get_hitl_instructions("physiology") if hitl_enabled else "")
         + PHYSIOLOGY_FINAL_CHECKLIST
     )
