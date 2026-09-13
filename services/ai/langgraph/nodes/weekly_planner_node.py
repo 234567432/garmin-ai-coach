@@ -132,7 +132,7 @@ async def weekly_planner_node(state: TrainingAnalysisState) -> dict[str, list | 
         
         response = await base_llm.ainvoke(messages_with_qa)
         content_text = response.content if hasattr(response, "content") else str(response)
-        return AgentOutput(content=content_text)
+        return AgentOutput(output=content_text, content=content_text)
 #    async def call_weekly_planning():
 #        messages_with_qa = base_messages + qa_messages
 #        if tools:
