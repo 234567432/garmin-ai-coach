@@ -109,8 +109,9 @@ async def activity_expert_node(state: TrainingAnalysisState) -> dict[str, list |
 
     system_prompt = (
         get_workflow_context("activity")
-        + ACTIVITY_EXPERT_SYSTEM_PROMPT_BASE
+        + ACTIVITY_SYSTEM_PROMPT_BASE
         + (get_plotting_instructions("activity") if plotting_enabled else "")
+        + (PLOT_MUST_CALL_INSTRUCTION if plotting_enabled else "")
         + (get_hitl_instructions("activity") if hitl_enabled else "")
         + ACTIVITY_FINAL_CHECKLIST
     )
