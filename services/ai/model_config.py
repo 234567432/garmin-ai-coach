@@ -244,7 +244,7 @@ class ModelSelector:
                 temperature=0.2,
                 num_ctx=16384,
                 num_predict=8192, #neu eingefügt, für bessere Hardware anpassen
-                repeat_penalty=1.2 # NEU: Verhindert textliche Wiederholungsschleifen
+                repeat_penalty=1.1 # NEU: Verhindert textliche Wiederholungsschleifen
 #                format="json"  # <-- WICHTIG: Aktiviert die native strukturierte JSON-Ausgabe
             )
         # ---------------------------------
