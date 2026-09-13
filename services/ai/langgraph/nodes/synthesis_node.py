@@ -9,7 +9,7 @@ from services.ai.model_config import ModelSelector
 from services.ai.tools.plotting import PlotStorage
 from services.ai.utils.retry_handler import AI_ANALYSIS_CONFIG, retry_with_backoff
 
-from .tool_calling_helper import handle_tool_calling_in_node
+#from .tool_calling_helper import handle_tool_calling_in_node
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +57,10 @@ SYNTHESIS_USER_PROMPT_BASE = """Synthesize the expert analyses into a comprehens
 2. **Identify Patterns**: Spot trends in performance and adaptation.
 3. **Synthesize**: Create a coherent story, not just a list of facts.
 
-## Output Format
+## Output Format & Formatting Rules
 - **Executive Summary**: High-level status and key takeaways.
 - **Key Performance Indicators**: Table format.
+  - CRITICAL: Always insert an empty newline BEFORE starting any Markdown table.
 - **Deep Dive**: Structured sections with clear headings.
 - **Recommendations**: Brief and actionable.
 - **Tone**: Professional, evidence-based, encouraging."""
@@ -93,6 +94,28 @@ async def synthesis_node(state: TrainingAnalysisState) -> dict[str, list | str]:
                 user_answers_block = str(raw_answers)
         else:
             user_answers_block = "No direct feedback provided by athlete for this run."
+        available_plots = state.get("plots", []) or state.get("available_plots", [])
+        if plotting_enabled and available_plots:
+            plot_lines = []
+            for p in available_plots:
+                if isinstance(p, dict):
+                    p_id = p.get("plot_id", "")
+                    desc = p.get("description", "")
+                    plot_lines.append(f"- ID: {p_id} | Description: {desc}")
+                else:
+                    plot_lines.append(f"- ID: {p}")
+            plot_list_str = "\n".join(plot_lines)
+            user_plot_instructions = (
+                f"\n\n## Available Plot References\n"
+                f"You MUST embed ONLY the following generated plot IDs into your markdown using the exact syntax `[PLOT:plot_id]`:\n"
+                f"{plot_list_str}\n"
+                f"CRITICAL: Do NOT invent or alter any plot IDs. Include each unique tag EXACTLY ONCE."
+            )
+        else:
+            user_plot_instructions = (
+                "\n\n## Plot References\n"
+                "No plots are available for this run. Do NOT insert any `[PLOT: ...]` tags anywhere in your output."
+            )
         async def call_synthesis_analysis():
             llm = ModelSelector.get_llm(AgentRole.SYNTHESIS)
             system_content = SYNTHESIS_SYSTEM_PROMPT_BASE + (SYNTHESIS_PLOT_INSTRUCTIONS if plotting_enabled else "")
@@ -105,7 +128,7 @@ async def synthesis_node(state: TrainingAnalysisState) -> dict[str, list | str]:
                 competitions=json.dumps(state.get("competitions", []), indent=2),
                 current_date=json.dumps(state.get("current_date", ""), indent=2),
                 style_guide=state.get("style_guide", ""),
-            ) + (SYNTHESIS_USER_PLOT_INSTRUCTIONS if plotting_enabled else "")
+            ) + user_plot_instructions
 
             response = await llm.ainvoke([
                 {"role": "system", "content": system_content},
