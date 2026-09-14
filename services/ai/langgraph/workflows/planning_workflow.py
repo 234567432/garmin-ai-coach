@@ -149,7 +149,7 @@ def create_integrated_analysis_and_planning_workflow():
 
     if ollama_mode:
         logger.info(
-            ""Local Ollama mode enabled: "
+            "Local Ollama mode enabled: "
             "serializing summarizers and experts to optimize GPU VRAM usage"
         )
 
