@@ -149,9 +149,8 @@ def create_integrated_analysis_and_planning_workflow():
 
     if ollama_mode:
         logger.info(
-            "Ollama CPU mode enabled: "
-            "serializing summarizers and experts to avoid "
-            "parallel local LLM inference"
+            ""Local Ollama mode enabled: "
+            "serializing summarizers and experts to optimize GPU VRAM usage"
         )
 
         # -----------------------------------------------------
@@ -282,8 +281,8 @@ def create_integrated_analysis_and_planning_workflow():
 
     if ollama_mode:
         logger.info(
-            "Created integrated analysis + planning workflow "
-            "with CPU-friendly sequential Ollama execution"
+            "Local Ollama mode enabled: "
+            "serializing summarizers and experts to optimize GPU VRAM usage"
         )
     else:
         logger.info(
