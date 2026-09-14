@@ -67,6 +67,12 @@ Analyze the metrics summary to identify patterns and trends.
 - Do NOT infer internal physiology (Physiology Expert's job).
 - Focus on **how the training stimulus behaves over time**.
 
+CRITICAL TERMINOLOGY & UNIT RULES:
+- HR / Heart Rate is measured in "bpm" (Beats Per Minute).
+- HRV / Heart Rate Variability is measured in "ms" (milliseconds, rMSSD/SDNN) or as a 0-100 score. NEVER write "bpm" for HRV.
+- A heart rate range (e.g. 120 bpm - 142 bpm) is simply "Heart Rate" or "HR range", NEVER "HRV".
+- Elevation Gain & Terrain: Drops in pace during uphill sections are normal physics, NOT poor pacing or execution issues.
+
 ## Inputs
 ### Metrics Summary
 {data}
