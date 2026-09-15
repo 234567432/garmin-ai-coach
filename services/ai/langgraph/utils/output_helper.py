@@ -91,7 +91,6 @@ def extract_expert_output(expert_output: Any, target_field: str) -> str:
     elif isinstance(expert_output, Mapping):
         output_container = expert_output.get("output")
 
-    # Wenn der Output eine Liste ist, handelt es sich um Fragen aus der KI-Analyse
     if isinstance(output_container, list):
         logger.warning(
             "Expert output contains questions (List format) instead of direct analysis. "
@@ -160,42 +159,73 @@ def extract_current_date(state: dict | None) -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
-def calculate_precalculated_kpis(garmin_data: dict, current_date_str: str) -> dict:
-    """Berechnet zusammenfassende KPIs aus der Historie (bis zu 56 Tage)."""
+def calculate_precalculated_kpis(state_or_garmin: dict | None, current_date_str: str) -> dict:
+    """Berechnet zusammenfassende KPIs aus der Historie mit flexiblen Fallbacks für verschachtelte Dicts."""
+    garmin_data = {}
+    if isinstance(state_or_garmin, dict):
+        garmin_data = (
+            state_or_garmin.get("garmin_data")
+            or state_or_garmin.get("context", {}).get("garmin_data")
+            or state_or_garmin
+        )
+
     if not isinstance(garmin_data, dict):
         garmin_data = {}
 
-    # VO2Max (Aktuellster Wert)
-    vo2_data = garmin_data.get("vo2_max_history", {})
-    latest_vo2 = vo2_data.get("latest_value", "N/A") if isinstance(vo2_data, dict) else "N/A"
+    # VO2 Max (Aktuellster Wert)
+    vo2_data = garmin_data.get("vo2_max_history") or garmin_data.get("vo2max") or garmin_data.get("vo2_max")
+    latest_vo2 = "N/A"
+    if isinstance(vo2_data, dict):
+        latest_vo2 = str(vo2_data.get("latest_value") or vo2_data.get("vo2Max") or vo2_data.get("value") or "N/A")
+    elif isinstance(vo2_data, (int, float, str)):
+        latest_vo2 = str(vo2_data)
 
     # HRV Status
-    hrv_data = garmin_data.get("hrv_summary", {})
+    hrv_data = garmin_data.get("hrv_summary") or garmin_data.get("hrv") or garmin_data.get("hrv_status")
     if isinstance(hrv_data, dict):
-        hrv_status = hrv_data.get("status", "Balanced")
-        hrv_7d_avg = hrv_data.get("weekly_avg", "N/A")
-        hrv_str = f"{hrv_status} (7-Day Avg: {hrv_7d_avg} ms)"
+        hrv_status = hrv_data.get("status") or hrv_data.get("hrvSummary", {}).get("status", "Balanced")
+        hrv_7d_avg = hrv_data.get("weekly_avg") or hrv_data.get("last7DaysAvg") or hrv_data.get("weeklyAvg", "N/A")
+        hrv_str = f"{hrv_status} ({hrv_7d_avg} ms)" if hrv_7d_avg != "N/A" else str(hrv_status)
+    elif isinstance(hrv_data, str):
+        hrv_str = hrv_data
     else:
         hrv_str = "N/A"
 
     # Stress Level
-    stress_data = garmin_data.get("stress_summary", {})
-    avg_stress_7d = (
-        stress_data.get("avg_stress_7d", "N/A") if isinstance(stress_data, dict) else "N/A"
-    )
+    stress_data = garmin_data.get("stress_summary") or garmin_data.get("stress")
+    avg_stress_7d = "N/A"
+    if isinstance(stress_data, dict):
+        avg_stress_7d = str(
+            stress_data.get("avg_stress_7d")
+            or stress_data.get("weekly_avg")
+            or stress_data.get("avg")
+            or "N/A"
+        )
+    elif isinstance(stress_data, (int, float, str)):
+        avg_stress_7d = str(stress_data)
+
+    stress_str = f"{avg_stress_7d} (7-day average)" if avg_stress_7d != "N/A" else "N/A"
 
     # Training Load Trend
-    load_history = garmin_data.get("training_load_history", [])
-    current_load = (
-        load_history[-1].get("load", "N/A")
-        if isinstance(load_history, list) and load_history
-        else "N/A"
+    load_history = (
+        garmin_data.get("training_load_history")
+        or garmin_data.get("training_load")
+        or garmin_data.get("load")
     )
+    current_load = "N/A"
+    if isinstance(load_history, list) and load_history:
+        last_entry = load_history[-1]
+        if isinstance(last_entry, dict):
+            current_load = str(last_entry.get("load") or last_entry.get("value") or "N/A")
+        else:
+            current_load = str(last_entry)
+    elif isinstance(load_history, (int, float, str)):
+        current_load = str(load_history)
 
     return {
         "as_of_date": current_date_str,
         "vo2_max_current": latest_vo2,
         "hrv_status": hrv_str,
-        "avg_stress_7d": f"{avg_stress_7d} (7-day average)",
+        "avg_stress_7d": stress_str,
         "current_training_load": current_load,
     }
