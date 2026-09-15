@@ -6,6 +6,10 @@ from services.ai.ai_settings import AgentRole
 from services.ai.langgraph.schemas import MetricsExpertOutputs
 from services.ai.langgraph.state.training_analysis_state import TrainingAnalysisState
 from services.ai.langgraph.utils.message_helper import normalize_langchain_messages
+from services.ai.langgraph.utils.output_helper import (
+    calculate_precalculated_kpis,
+    extract_current_date,
+)
 from services.ai.model_config import ModelSelector
 from services.ai.tools.plotting import PlotStorage
 from services.ai.utils.retry_handler import AI_ANALYSIS_CONFIG, retry_with_backoff
@@ -74,11 +78,17 @@ CRITICAL TERMINOLOGY & UNIT RULES:
 - Elevation Gain & Terrain: Drops in pace during uphill sections are normal physics, NOT poor pacing or execution issues.
 
 ## Inputs
+### Pre-Calculated Key Metrics (Primary Focus)
+```json
+{precomputed_kpis}
+```
+
 ### Metrics Summary
 {data}
+
 ### Context
 - Competitions: ```json {competitions} ```
-- Date: ```json {current_date} ```
+- Date: {current_date}
 - **User Context**: ``` {analysis_context} ```
 
 ## Output Requirements
@@ -118,6 +128,7 @@ PLOT_MUST_CALL_INSTRUCTION = """
 You MUST call the plot creation tool at least once to generate a chart visualizing training load trends or VO2max progression before producing your final structured answer.
 """
 
+
 async def metrics_expert_node(state: TrainingAnalysisState) -> dict[str, list | str | dict]:
     logger.info("Starting metrics expert analysis node")
 
@@ -130,6 +141,11 @@ async def metrics_expert_node(state: TrainingAnalysisState) -> dict[str, list | 
         "enabled" if plotting_enabled else "disabled",
         "enabled" if hitl_enabled else "disabled",
     )
+
+    # Dynamisches Datum & vorgefertigte KPIs sicher INSIDE des Nodes berechnen
+    current_date_str = extract_current_date(state)
+    garmin_data = state.get("garmin_data", {})
+    precomputed_kpis = calculate_precalculated_kpis(garmin_data, current_date_str)
 
     tools = configure_node_tools(
         agent_name="metrics",
@@ -161,10 +177,11 @@ async def metrics_expert_node(state: TrainingAnalysisState) -> dict[str, list | 
             {
                 "role": "user",
                 "content": METRICS_USER_PROMPT.format(
+                    precomputed_kpis=json.dumps(precomputed_kpis, indent=2),
                     data=state.get("metrics_summary", "No metrics summary available"),
-                    competitions=json.dumps(state["competitions"], indent=2),
-                    current_date=json.dumps(state["current_date"], indent=2),
-                    analysis_context=state["analysis_context"],
+                    competitions=json.dumps(state.get("competitions", []), indent=2),
+                    current_date=current_date_str,
+                    analysis_context=state.get("analysis_context", ""),
                 ),
             },
         ]
