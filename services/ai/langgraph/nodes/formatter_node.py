@@ -94,6 +94,7 @@ STATIC_HTML_TEMPLATE = """<!DOCTYPE html>
     th {
       background-color: #f1f3f5;
       color: #1a252f;
+      font-weight: bold;
     }
     tr:nth-child(even) {
       background-color: #f8f9fa;
@@ -117,17 +118,16 @@ STATIC_HTML_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
+
 def parse_json_to_markdown(raw_input: str) -> str:
     """Parst JSON-Strukturen deterministisch in sauberes Markdown."""
     try:
-        # Falls der String von Markdown-Code-Blocks umschlossen ist (```json ...)
         clean_input = raw_input.strip()
         if clean_input.startswith("```"):
             clean_input = clean_input.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
         data = json.loads(clean_input)
     except Exception:
-        # Falls kein JSON vorliegt, unberührt zurückgeben
         return raw_input
 
     if not isinstance(data, dict):
@@ -147,9 +147,8 @@ def parse_json_to_markdown(raw_input: str) -> str:
                 sub_title = sub_key.replace("_", " ").title()
 
                 if isinstance(sub_val, list):
-                    md_lines.append(f"### {sub_title}")
+                    md_lines.append(f"### {sub_title}\n")
                     if sub_val and isinstance(sub_val[0], dict):
-                        # Tabelle für Liste von Dicts (z. B. Metrics/KPIs)
                         headers = list(sub_val[0].keys())
                         md_lines.append("| " + " | ".join([h.replace("_", " ").title() for h in headers]) + " |")
                         md_lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
@@ -166,7 +165,7 @@ def parse_json_to_markdown(raw_input: str) -> str:
                     md_lines.append(f"**{sub_title}:** {sub_val}\n")
 
         elif isinstance(value, list):
-            md_lines.append(f"## {section_title}")
+            md_lines.append(f"## {section_title}\n")
             if value and isinstance(value[0], dict):
                 headers = list(value[0].keys())
                 md_lines.append("| " + " | ".join([h.replace("_", " ").title() for h in headers]) + " |")
@@ -181,19 +180,71 @@ def parse_json_to_markdown(raw_input: str) -> str:
                     md_lines.append(f"- {clean_item}")
                 md_lines.append("")
         else:
-            md_lines.append(f"## {section_title}\n{value}\n")
+            md_lines.append(f"## {section_title}\n\n{value}\n")
 
     return "\n".join(md_lines)
 
 
+def _prepare_markdown_formatting(md_text: str) -> str:
+    """Bereinigt Markdown von LLM-Fehlern vor der Konvertierung."""
+    if not md_text:
+        return ""
+
+    lines = md_text.splitlines()
+    cleaned_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Wandelt fettgedruckte Zeilen in H2-Ueberschriften um
+        if stripped.startswith("**") and stripped.endswith("**") and len(stripped) > 4:
+            header_text = stripped[2:-2].strip()
+            cleaned_lines.append(f"\n## {header_text}\n")
+            continue
+
+        # Fuegt eine Leerzeile vor Tabellen ein
+        if stripped.startswith("|") and cleaned_lines and not cleaned_lines[-1].strip().startswith("|") and cleaned_lines[-1].strip() != "":
+            cleaned_lines.append("")
+
+        cleaned_lines.append(line)
+
+    return "\n".join(cleaned_lines)
+
+
 def _convert_markdown_to_html(md_text: str) -> str:
-    """Konvertiert Markdown in HTML und erzeugt interaktive Checkboxen."""
+    """Konvertiert Markdown in HTML mit Tabellen-Unterstuetzung."""
+    md_text = _prepare_markdown_formatting(md_text)
+
     if markdown:
-        html = markdown.markdown(md_text, extensions=["tables", "fenced_code"])
+        html = markdown.markdown(
+            md_text,
+            extensions=["tables", "fenced_code", "nl2br", "sane_lists"]
+        )
     else:
         html_lines = []
+        in_table = False
+
         for line in md_text.splitlines():
             line_str = line.strip()
+
+            if line_str.startswith("|"):
+                if not in_table:
+                    html_lines.append("<table>")
+                    in_table = True
+
+                if "---" in line_str:
+                    continue
+
+                cells = [c.strip() for c in line_str.split("|")[1:-1]]
+                tag = "th" if "KPI" in line_str or "Value" in line_str else "td"
+                row_html = "".join([f"<{tag}>{c}</{tag}>" for c in cells])
+                html_lines.append(f"<tr>{row_html}</tr>")
+                continue
+
+            if in_table and not line_str.startswith("|"):
+                html_lines.append("</table>")
+                in_table = False
+
             if line_str.startswith("## "):
                 html_lines.append(f"<h2>{line_str[3:]}</h2>")
             elif line_str.startswith("### "):
@@ -204,10 +255,14 @@ def _convert_markdown_to_html(md_text: str) -> str:
                 html_lines.append(f"<blockquote>{line_str[2:]}</blockquote>")
             elif line_str:
                 html_lines.append(f"<p>{line_str}</p>")
+
+        if in_table:
+            html_lines.append("</table>")
+
         html = "\n".join(html_lines)
 
     html = html.replace("[ ] ", '<label><input type="checkbox"> ')
-    html = html.replace("[x] ", '<label><input type="checkbox" checked> ')
+    html = html.replace("[x] ", '<label><input type="checkbox" checked> </label>')
     return html
 
 
@@ -220,10 +275,7 @@ async def formatter_node(state: TrainingAnalysisState) -> dict[str, list | str]:
         async def call_html_formatting():
             synthesis_result = extract_text_content(state.get("synthesis_result", ""))
 
-            # 1. JSON-Struktur deterministisch in Markdown auflösen
             markdown_content = parse_json_to_markdown(synthesis_result)
-
-            # 2. Markdown in HTML konvertieren
             content_html = _convert_markdown_to_html(markdown_content)
             return STATIC_HTML_TEMPLATE.replace("<!--CONTENT_PLACEHOLDER-->", content_html)
 
