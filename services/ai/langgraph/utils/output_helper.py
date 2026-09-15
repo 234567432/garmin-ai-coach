@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Mapping
+from datetime import datetime, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ def _save_questions_to_file(questions: list) -> None:
     try:
         os.makedirs("output", exist_ok=True)
         questions_file = os.path.join("output", "open_questions.txt")
-        
+
         formatted_questions = []
         for q in questions:
             if hasattr(q, "question"):
@@ -73,7 +74,7 @@ def _save_questions_to_file(questions: list) -> None:
         with open(questions_file, "a", encoding="utf-8") as f:
             f.write("--- Offene Fragen der KI ---\n")
             f.write("\n".join(formatted_questions) + "\n\n")
-            
+
         logger.info("Offene Fragen wurden in '%s' gesichert.", questions_file)
     except Exception as e:
         logger.error("Fehler beim Speichern der offenen Fragen: %s", e)
@@ -97,8 +98,7 @@ def extract_expert_output(expert_output: Any, target_field: str) -> str:
             "Logging questions and continuing without HITL exception."
         )
         _save_questions_to_file(output_container)
-        
-        # Fragen als formatierten Text zurückgeben, damit die Synthese nicht leermeldend abstürzt
+
         rendered_questions = []
         for q in output_container:
             if hasattr(q, "question"):
@@ -114,7 +114,11 @@ def extract_expert_output(expert_output: Any, target_field: str) -> str:
         if payload is not _MISSING:
             return _render_receiver_payload(payload)
 
-    logger.warning("Expert output missing '%target_field%' field. Type: %s. Returning raw representation.", target_field, type(expert_output))
+    logger.warning(
+        "Expert output missing '%s' field. Type: %s. Returning raw representation.",
+        target_field,
+        type(expert_output),
+    )
     return str(output_container if output_container is not _MISSING else expert_output)
 
 
@@ -142,3 +146,56 @@ def extract_agent_content(value: Any) -> str:
         return value
 
     return str(value)
+
+
+def extract_current_date(state: dict | None) -> str:
+    """Extrahiert das Datum dynamisch aus dem State ohne hartcodierte Jahreszahlen."""
+    if not state:
+        return datetime.now().strftime("%Y-%m-%d")
+    raw_date = state.get("current_date")
+    if isinstance(raw_date, dict):
+        return raw_date.get("date") or datetime.now().strftime("%Y-%m-%d")
+    if isinstance(raw_date, str) and raw_date:
+        return raw_date
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def calculate_precalculated_kpis(garmin_data: dict, current_date_str: str) -> dict:
+    """Berechnet zusammenfassende KPIs aus der Historie (bis zu 56 Tage)."""
+    if not isinstance(garmin_data, dict):
+        garmin_data = {}
+
+    # VO2Max (Aktuellster Wert)
+    vo2_data = garmin_data.get("vo2_max_history", {})
+    latest_vo2 = vo2_data.get("latest_value", "N/A") if isinstance(vo2_data, dict) else "N/A"
+
+    # HRV Status
+    hrv_data = garmin_data.get("hrv_summary", {})
+    if isinstance(hrv_data, dict):
+        hrv_status = hrv_data.get("status", "Balanced")
+        hrv_7d_avg = hrv_data.get("weekly_avg", "N/A")
+        hrv_str = f"{hrv_status} (7-Day Avg: {hrv_7d_avg} ms)"
+    else:
+        hrv_str = "N/A"
+
+    # Stress Level
+    stress_data = garmin_data.get("stress_summary", {})
+    avg_stress_7d = (
+        stress_data.get("avg_stress_7d", "N/A") if isinstance(stress_data, dict) else "N/A"
+    )
+
+    # Training Load Trend
+    load_history = garmin_data.get("training_load_history", [])
+    current_load = (
+        load_history[-1].get("load", "N/A")
+        if isinstance(load_history, list) and load_history
+        else "N/A"
+    )
+
+    return {
+        "as_of_date": current_date_str,
+        "vo2_max_current": latest_vo2,
+        "hrv_status": hrv_str,
+        "avg_stress_7d": f"{avg_stress_7d} (7-day average)",
+        "current_training_load": current_load,
+    }
