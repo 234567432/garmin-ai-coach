@@ -4,17 +4,16 @@ from datetime import datetime
 
 from services.ai.ai_settings import AgentRole
 from services.ai.langgraph.state.training_analysis_state import TrainingAnalysisState
-from services.ai.langgraph.utils.output_helper import extract_expert_output
+from services.ai.langgraph.utils.output_helper import (
+    calculate_precalculated_kpis,
+    extract_current_date,
+    extract_expert_output,
+)
 from services.ai.model_config import ModelSelector
 from services.ai.tools.plotting import PlotStorage
 from services.ai.utils.retry_handler import AI_ANALYSIS_CONFIG, retry_with_backoff
 
-#from .tool_calling_helper import handle_tool_calling_in_node
-
 logger = logging.getLogger(__name__)
-
-
-
 
 
 SYNTHESIS_SYSTEM_PROMPT_BASE = """You are a performance integration specialist.
@@ -33,6 +32,11 @@ SYNTHESIS_PLOT_INSTRUCTIONS = """
 SYNTHESIS_USER_PROMPT_BASE = """Synthesize the expert analyses into a comprehensive athlete report for {athlete_name}.
 
 ## Inputs
+### Pre-Calculated Key Metrics (STRICT SOURCE FOR KPI TABLE)
+```json
+{precomputed_kpis}
+```
+
 ### Metrics
 ```markdown
 {metrics_result}
@@ -47,15 +51,22 @@ SYNTHESIS_USER_PROMPT_BASE = """Synthesize the expert analyses into a comprehens
 ```
 ### Direct Athlete Feedback / Answers
 {user_answers_block}
+
 ### Context
 - Competitions: ```json {competitions} ```
-- Date: ```json {current_date} ```
+- Date: {current_date}
 - Style: ```markdown {style_guide} ```
 
 ## Task
 1. **Integrate**: Connect load (metrics), execution (activity), and response (physiology).
 2. **Identify Patterns**: Spot trends in performance and adaptation.
 3. **Synthesize**: Create a coherent story, not just a list of facts.
+
+## STRICT KPI TABLE RULES
+1. ONLY use the data provided under "Pre-Calculated Key Metrics" for the Key Performance Indicators table.
+2. DO NOT use technical raw fields like "Last Night 5min High" or single-second max stress spikes (e.g. 97).
+3. Always display HRV as overall weekly status (e.g., "Balanced / 55 ms") and Stress as weekly average (e.g., "24 (Low)").
+4. Do NOT reference historical dates older than 28 days from the current date ({current_date}).
 
 ## Output Format & Formatting Rules
 - **Executive Summary**: High-level status and key takeaways.
@@ -86,6 +97,10 @@ async def synthesis_node(state: TrainingAnalysisState) -> dict[str, list | str]:
 
         agent_start_time = datetime.now()
 
+        current_date_str = extract_current_date(state)
+        garmin_data = state.get("garmin_data", {})
+        precomputed_kpis = calculate_precalculated_kpis(garmin_data, current_date_str)
+
         raw_answers = state.get("user_answers") or state.get("context", {}).get("answers", "")
         if raw_answers:
             if isinstance(raw_answers, list):
@@ -94,6 +109,7 @@ async def synthesis_node(state: TrainingAnalysisState) -> dict[str, list | str]:
                 user_answers_block = str(raw_answers)
         else:
             user_answers_block = "No direct feedback provided by athlete for this run."
+
         available_plots = state.get("plots", []) or state.get("available_plots", [])
         if plotting_enabled and available_plots:
             plot_lines = []
@@ -116,26 +132,39 @@ async def synthesis_node(state: TrainingAnalysisState) -> dict[str, list | str]:
                 "\n\n## Plot References\n"
                 "No plots are available for this run. Do NOT insert any `[PLOT: ...]` tags anywhere in your output."
             )
+
         async def call_synthesis_analysis():
             llm = ModelSelector.get_llm(AgentRole.SYNTHESIS)
-            system_content = SYNTHESIS_SYSTEM_PROMPT_BASE + (SYNTHESIS_PLOT_INSTRUCTIONS if plotting_enabled else "")
-            user_content = SYNTHESIS_USER_PROMPT_BASE.format(
-                athlete_name=state.get("athlete_name", "Athlete"),
-                metrics_result=extract_expert_output(state.get("metrics_outputs"), "for_synthesis"),
-                activity_result=extract_expert_output(state.get("activity_outputs"), "for_synthesis"),
-                physiology_result=extract_expert_output(state.get("physiology_outputs"), "for_synthesis"),
-                user_answers_block=user_answers_block,
-                competitions=json.dumps(state.get("competitions", []), indent=2),
-                current_date=json.dumps(state.get("current_date", ""), indent=2),
-                style_guide=state.get("style_guide", ""),
-            ) + user_plot_instructions
+            system_content = SYNTHESIS_SYSTEM_PROMPT_BASE + (
+                SYNTHESIS_PLOT_INSTRUCTIONS if plotting_enabled else ""
+            )
+            user_content = (
+                SYNTHESIS_USER_PROMPT_BASE.format(
+                    athlete_name=state.get("athlete_name", "Athlete"),
+                    precomputed_kpis=json.dumps(precomputed_kpis, indent=2),
+                    metrics_result=extract_expert_output(
+                        state.get("metrics_outputs"), "for_synthesis"
+                    ),
+                    activity_result=extract_expert_output(
+                        state.get("activity_outputs"), "for_synthesis"
+                    ),
+                    physiology_result=extract_expert_output(
+                        state.get("physiology_outputs"), "for_synthesis"
+                    ),
+                    user_answers_block=user_answers_block,
+                    competitions=json.dumps(state.get("competitions", []), indent=2),
+                    current_date=current_date_str,
+                    style_guide=state.get("style_guide", ""),
+                )
+                + user_plot_instructions
+            )
 
             response = await llm.ainvoke([
                 {"role": "system", "content": system_content},
-                {"role": "user", "content": user_content}
+                {"role": "user", "content": user_content},
             ])
             return response.content
-            
+
         synthesis_result = await retry_with_backoff(
             call_synthesis_analysis, AI_ANALYSIS_CONFIG, "Synthesis Analysis with Tools"
         )
